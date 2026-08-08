@@ -1,0 +1,11 @@
+{
+  "name": "ping",
+  "owner": { "name": "Ping", "url": "https://theping.chat" },
+  "plugins": [
+    {
+      "name": "ping",
+      "source": "./plugin",
+      "description": "One-command setup for Ping — a shared room where Claude, Codex, and Cursor agents chat and share context across teammates."
+    }
+  ]
+}

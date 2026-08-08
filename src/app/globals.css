@@ -1,0 +1,420 @@
+@import "tailwindcss";
+
+/* =============================================================
+   Ping — "ANOX" style (borrowed): OLED black · monospace display
+   sharp hairline grid · square buttons · dot-halftone · corner marks
+   no glass, no rounded cards, no shadows · light = paper variant
+============================================================= */
+
+/* ---- DARK / OLED (primary) ---- */
+:root,
+:root[data-theme="dark"] {
+  --bg: #000000;
+  --bg-2: #070707;
+  --panel: #0a0a0a;
+  --panel-2: #0e0e0e;
+  --border: rgba(255, 255, 255, 0.12);
+  --border-strong: rgba(255, 255, 255, 0.24);
+  --text: #fafafa;
+  --muted: #8f8f8f;
+  --faint: #565656;
+  --ok: #f5f5f5;
+  --danger: #ff6b6b;
+
+  /* monochrome "accent" = solid white */
+  --accent: #fafafa;
+  --accent-ink: #fafafa;
+  --on-accent: #000000;
+  --focus: rgba(255, 255, 255, 0.5);
+
+  --grad-from: #ffffff;
+  --grad-to: #ffffff;
+
+  --dot: rgba(255, 255, 255, 0.14);
+
+  --bubble-out-bg: #fafafa;
+  --bubble-out-fg: #000000;
+
+  color-scheme: dark;
+}
+
+/* ---- LIGHT / paper (matches the reference demo) ---- */
+:root[data-theme="light"] {
+  --bg: #ffffff;
+  --bg-2: #f5f5f5;
+  --panel: #fafafa;
+  --panel-2: #f2f2f2;
+  --border: rgba(0, 0, 0, 0.14);
+  --border-strong: rgba(0, 0, 0, 0.26);
+  --text: #0a0a0a;
+  --muted: #555555;
+  --faint: #9a9a9a;
+  --ok: #0a0a0a;
+  --danger: #d92d20;
+
+  --accent: #0a0a0a;
+  --accent-ink: #0a0a0a;
+  --on-accent: #ffffff;
+  --focus: rgba(0, 0, 0, 0.45);
+
+  --grad-from: #0a0a0a;
+  --grad-to: #0a0a0a;
+
+  --dot: rgba(0, 0, 0, 0.14);
+
+  --bubble-out-bg: #0a0a0a;
+  --bubble-out-fg: #ffffff;
+
+  color-scheme: light;
+}
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-border: var(--border);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-accent: var(--accent);
+  --font-sans: var(--font-inter);
+  --font-mono: var(--font-jbmono);
+}
+
+html {
+  scroll-behavior: smooth;
+  background: var(--bg);
+}
+html,
+body {
+  color: var(--text);
+  background: var(--bg);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+::selection {
+  background: var(--accent);
+  color: var(--on-accent);
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+/* inputs show focus via their own border (focus/focus-within) — no boxy outline */
+input:focus,
+input:focus-visible,
+textarea:focus,
+textarea:focus-visible,
+select:focus,
+select:focus-visible {
+  outline: none;
+}
+html, body, .card, .btn, .btn-ghost {
+  transition: background-color 0.18s ease, border-color 0.18s ease, color 0.18s ease;
+}
+
+/* ---- type ---- */
+.mono {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-feature-settings: "ss01";
+}
+/* monospace display headline — the Anox signature */
+.display {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.04;
+}
+.label {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 11px;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.gradient-text {
+  color: var(--text);
+}
+.accent-text { color: var(--text); }
+.wrap {
+  width: 100%;
+  max-width: 1140px;
+  margin: 0 auto;
+  padding-inline: 24px;
+}
+.hair {
+  border-top: 1px solid var(--border);
+}
+
+/* ---- buttons: square, mono, uppercase ---- */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--font-mono), monospace;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+  padding: 0.85rem 1.4rem;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.btn:hover {
+  opacity: 0.85;
+  transform: translateY(-1px);
+}
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-mono), monospace;
+  font-weight: 600;
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border: 1px solid var(--border-strong);
+  border-radius: 3px;
+  padding: 0.85rem 1.4rem;
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+.btn-ghost:hover {
+  border-color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+
+/* ---- flat hairline cells (no glass, no radius, no shadow) ---- */
+.card {
+  border: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 4px;
+}
+
+/* framed mock — bordered panel, mono, corner-mark ready */
+.idcard {
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  border-radius: 4px;
+  padding: 22px;
+  font-family: var(--font-mono), monospace;
+}
+.kv {
+  display: grid;
+  grid-template-columns: 120px 1fr;
+  gap: 4px 12px;
+  font-size: 13px;
+}
+.kv dt { color: var(--faint); }
+.kv dd { color: var(--text); }
+.logline {
+  font-family: var(--font-mono), monospace;
+  font-size: 13.5px;
+  line-height: 1.9;
+  color: var(--text);
+}
+.logline .ts { color: var(--faint); }
+.logline .who { color: var(--text); font-weight: 600; }
+
+/* ---- dot halftone texture ---- */
+.halftone {
+  background-image: radial-gradient(var(--dot) 1px, transparent 1.6px);
+  background-size: 18px 18px;
+  -webkit-mask-image: radial-gradient(130% 100% at 50% 0%, #000 25%, transparent 72%);
+  mask-image: radial-gradient(130% 100% at 50% 0%, #000 25%, transparent 72%);
+}
+
+/* ---- scroll progress ---- */
+#progress {
+  position: fixed;
+  top: 0;
+  left: 0;
+  height: 2px;
+  width: 100%;
+  transform: scaleX(0);
+  transform-origin: 0 50%;
+  background: var(--accent);
+  z-index: 60;
+}
+
+/* ---- theme toggle (square-ish) ---- */
+.theme-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 3px;
+  border: 1px solid var(--border-strong);
+  color: var(--muted);
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.theme-toggle:hover { color: var(--text); border-color: var(--text); }
+
+/* ---- animated theme toggle (View Transitions clip-path reveal) ---- */
+::view-transition-group(root) {
+  animation-duration: var(--magicui-theme-toggle-vt-duration, 480ms);
+}
+::view-transition-image-pair(root) {
+  isolation: auto;
+}
+/* disable the default cross-fade — the new theme is revealed by the JS-driven
+   clip-path expanding over the old one */
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+  display: block;
+}
+:root[data-magicui-theme-vt="active"]::view-transition-old(root) { z-index: 0; }
+:root[data-magicui-theme-vt="active"]::view-transition-new(root) {
+  z-index: 1;
+  /* pin the collapsed clip so there's no flash before the JS animation starts */
+  clip-path: var(--magicui-theme-vt-clip-from);
+}
+@media (prefers-reduced-motion: reduce) {
+  ::view-transition-group(root),
+  ::view-transition-old(root),
+  ::view-transition-new(root) { animation: none !important; }
+}
+
+/* ---- dia text reveal: monochrome left-to-right wipe (dim → bright) ---- */
+.dia-reveal {
+  background-image: linear-gradient(
+    100deg,
+    var(--text) 0%, var(--text) 46%,
+    var(--faint) 54%, var(--faint) 100%
+  );
+  background-size: 300% 100%;
+  background-position: 100% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: dia-reveal 1.7s cubic-bezier(0.45, 0, 0.15, 1) 0.15s both;
+}
+@keyframes dia-reveal {
+  from { background-position: 100% 0; }
+  to   { background-position: 0% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dia-reveal {
+    animation: none;
+    background: none;
+    color: var(--text);
+    -webkit-text-fill-color: var(--text);
+  }
+}
+
+/* ---- markdown in chat bubbles (grey-based so it reads on light + dark bubbles) ---- */
+.md-code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.88em;
+  background: rgba(128, 128, 128, 0.24);
+  border-radius: 4px;
+  padding: 1px 5px;
+  color: inherit;
+}
+.md-pre {
+  margin: 6px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(128, 128, 128, 0.18);
+  overflow-x: auto;
+}
+.md-pre code {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 12.5px;
+  line-height: 1.55;
+  white-space: pre;
+  background: none;
+  padding: 0;
+  color: inherit;
+}
+.md-link { text-decoration: underline; text-underline-offset: 2px; }
+
+/* ---- media watermark: viewer's handle tiled over images (screenshot deterrent) ---- */
+.wm {
+  position: absolute;
+  inset: -35%;
+  display: flex;
+  flex-wrap: wrap;
+  align-content: center;
+  justify-content: center;
+  gap: 12px 24px;
+  transform: rotate(-24deg);
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font-mono), monospace;
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: rgba(255, 255, 255, 0.5);
+  mix-blend-mode: overlay;
+}
+
+/* ---- motion ---- */
+.rise { animation: rise 0.7s cubic-bezier(0.2, 0.6, 0.2, 1) both; }
+@keyframes rise {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.reveal { opacity: 0; transform: translateY(18px); will-change: transform, opacity; }
+
+/* =============================================================
+   Chat screen classes (monochrome)
+============================================================= */
+.radar { position: relative; width: 200px; height: 200px; display: grid; place-items: center; }
+.radar-core {
+  width: 70px; height: 70px; border-radius: 999px;
+  background: radial-gradient(circle at 30% 30%, #ffffff, #666);
+  box-shadow: 0 0 40px rgba(255, 255, 255, 0.22);
+  z-index: 2; animation: core-pulse 2.6s ease-in-out infinite;
+}
+.radar-ring {
+  position: absolute; inset: 0; margin: auto; width: 70px; height: 70px; border-radius: 999px;
+  border: 1.5px solid rgba(255, 255, 255, 0.32);
+  animation: ping-ring 2.6s cubic-bezier(0.2, 0.6, 0.3, 1) infinite;
+}
+.radar-ring:nth-child(2) { animation-delay: 0.65s; }
+.radar-ring:nth-child(3) { animation-delay: 1.3s; }
+@keyframes ping-ring { 0% { transform: scale(1); opacity: 0.8; } 80% { opacity: 0; } 100% { transform: scale(2.8); opacity: 0; } }
+@keyframes core-pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
+
+.btn-ping {
+  background: var(--accent); color: var(--on-accent); font-weight: 600; border-radius: 3px;
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.btn-ping:hover { transform: translateY(-1px); opacity: 0.85; }
+.btn-ping:active { transform: translateY(0); }
+
+.chip { border: 1px solid var(--border); background: color-mix(in srgb, var(--text) 4%, transparent); border-radius: 3px; }
+
+.live-dot { width: 8px; height: 8px; border-radius: 999px; background: var(--accent); box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); animation: live 1.8s ease-out infinite; }
+@keyframes live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); } 70% { box-shadow: 0 0 0 7px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+.msg-in { animation: msg-in 0.22s ease-out; }
+@keyframes msg-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+.typing-dots i { display: inline-block; width: 7px; height: 7px; border-radius: 999px; background: var(--muted); animation: typing 1.2s ease-in-out infinite; }
+.typing-dots i:nth-child(2) { animation-delay: 0.2s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.4s; }
+@keyframes typing { 0%, 60%, 100% { opacity: 0.3; transform: translateY(0); } 30% { opacity: 1; transform: translateY(-3px); } }
+
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  .radar-ring, .radar-core, .live-dot, .typing-dots i, .msg-in, .rise { animation: none; }
+  .reveal { opacity: 1; transform: none; }
+  html, body, .card, .btn, .btn-ghost { transition: none; }
+}
+
+/* ---------------------------------------------------------------
+   Mobile / iOS
+--------------------------------------------------------------- */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px; }
+}
+.pb-safe { padding-bottom: calc(0.75rem + env(safe-area-inset-bottom, 0px)); }
+@media (display-mode: standalone) {
+  body { padding-top: env(safe-area-inset-top, 0px); }
+}
