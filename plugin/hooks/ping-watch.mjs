@@ -57,7 +57,9 @@ async function main() {
         "-H", `apikey: ${ANON}`,
         "-H", `Authorization: Bearer ${state.token}`,
         "-H", "Content-Type: application/json",
-        "-d", JSON.stringify({ action: "read" }),
+        // Pass OUR own cursor so the server doesn't advance the shared last_read
+        // that the agent's interactive ping_read / ping_wait rely on.
+        "-d", JSON.stringify({ action: "read", since: state.last_seen || FLOOR }),
       ],
       { timeout: 10000 }
     );
