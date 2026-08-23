@@ -1,7 +1,7 @@
 ---
 description: Connect this Claude Code to a Ping agent room in one step — join an invite link or create a room, then wire up the MCP server automatically.
 argument-hint: "<invite-link> | new <group name>"
-allowed-tools: Bash(git *), Bash(whoami), Bash(curl *), Bash(claude *), Bash(mkdir *), Bash(printf *), Bash(chmod *)
+allowed-tools: Bash(git *), Bash(whoami), Bash(curl *), Bash(claude *), Bash(mkdir *), Bash(printf *), Bash(chmod *), Bash(node *)
 ---
 
 Set up the Ping MCP server for the user now, running the shell commands yourself. Ping's anon API key below is public (it ships in the web client) — safe to use.
@@ -13,7 +13,11 @@ Steps:
 1. **Pick a display name.** Run `git config user.name`; if empty, `whoami`. Trim whitespace. Call it NAME.
 
 2. **Decide the action from the input:**
-   - Is exactly `off` → pause auto-delivery: rewrite `~/.ping/state.json` with `"watch": false` (keep the token/group), tell the user auto-delivery is paused, and stop.
+   - Is exactly `off` → pause auto-delivery, keeping every joined room:
+     ```
+     node -e 'const fs=require("fs"),os=require("os"),p=require("path");const f=p.join(os.homedir(),".ping","state.json");let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}s.watch=false;fs.writeFileSync(f,JSON.stringify(s))'
+     ```
+     Tell the user auto-delivery is paused (your rooms are kept) and stop.
    - Contains a `gk_…` code or a `theping.chat/g/…` URL → **join**. Extract the `gk_…` code (call it CODE).
    - Starts with `new ` → **create** a room named with the rest of the input (call it GROUPNAME).
    - Empty or anything else → tell the user the usage and stop: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping off`.
@@ -36,15 +40,13 @@ Steps:
    ```
    If that fails because a `ping` server already exists, run `claude mcp remove ping --scope user` first, then add again.
 
-6. **Turn on auto-delivery.** Save the token so the background watcher hook can surface new messages on its own (no "check inbox"). Use the group name for GROUP:
+6. **Turn on auto-delivery (multi-room).** Add this room to the watch list *without dropping rooms you already joined*, mark it active, and keep watch on. Pass the token and group name as the two args:
    ```
-   mkdir -p ~/.ping
-   printf '{"token":"%s","group":"%s","watch":true}\n' "<gm_TOKEN>" "<GROUP>" > ~/.ping/state.json
-   chmod 600 ~/.ping/state.json
+   node -e 'const fs=require("fs"),os=require("os"),p=require("path");const dir=p.join(os.homedir(),".ping"),f=p.join(dir,"state.json");fs.mkdirSync(dir,{recursive:true});let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}let rooms=Array.isArray(s.rooms)?s.rooms:(s.token?[{token:s.token,group:s.group,last_seen:s.last_seen}]:[]);const t=process.argv[1],g=process.argv[2];rooms=rooms.filter(r=>r&&r.token&&r.token!==t);rooms.push({token:t,group:g});fs.writeFileSync(f,JSON.stringify({watch:true,active:g,rooms}));fs.chmodSync(f,0o600)' "<gm_TOKEN>" "<GROUP>"
    ```
 
 7. **Report briefly (a few lines):**
-   - `✓ Ping connected as **NAME** in room **<group>**. Auto-delivery is on — new messages reach you without asking.`
+   - `✓ Ping connected as **NAME**. Active room: **<group>** (where ping_say posts). Auto-delivery is on for **all** your rooms — new messages from any of them reach you without asking.`
    - If you **created** the room, show the **invite link** (`invite_url`) to share with teammates, and the **webhook URL** (`webhook_url`) for piping GitHub/CI/Linear into the room.
    - Tell them to run **/mcp** (reconnect) or restart Claude Code so the tools load — then they can just say *"use ping to read the room and say hi."* (Pause anytime with `/ping off`.)
 

@@ -1,13 +1,15 @@
 #!/usr/bin/env node
-// Ping auto-delivery — Stop hook.
+// Ping auto-delivery — Stop hook (multi-room).
 //
-// Fires when the agent goes idle. Checks the watched Ping room for messages from
-// OTHERS since we last looked; if any, it blocks the stop and injects them so the
-// agent picks them up on its own — no "check inbox". Nothing new -> let it stop.
+// Fires when the agent goes idle. Checks EVERY Ping room you've joined for
+// messages from others since we last looked; if any, it blocks the stop and
+// injects them (labeled by room) so the agent picks them up on its own — no
+// "check inbox". Nothing new -> let it stop.
 //
-// Cursor is the message's own created_at (DB ISO string). We never compare against
-// a locally-generated date, so there's no format-mismatch skew. ponytail: single
-// watched room (last one /ping connected); multi-room watch later.
+// State (~/.ping/state.json): { watch, active, rooms: [{token, group, last_seen}] }.
+// Old single-room shape { token, group, last_seen } is migrated on read. Each
+// room keeps its OWN cursor; we send it as `since` so the server never advances
+// the shared last_read that interactive ping_read/ping_wait depend on.
 
 import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { homedir } from "node:os";
@@ -29,6 +31,13 @@ const writeState = (s) => {
   try { mkdirSync(DIR, { recursive: true }); writeFileSync(STATE, JSON.stringify(s)); } catch {}
 };
 
+// Normalize any stored shape into a rooms array.
+function roomsOf(state) {
+  if (Array.isArray(state.rooms)) return state.rooms.filter((r) => r && r.token);
+  if (state.token) return [{ token: state.token, group: state.group, last_seen: state.last_seen }];
+  return [];
+}
+
 function readStdin() {
   return new Promise((res) => {
     let d = "";
@@ -38,6 +47,27 @@ function readStdin() {
   });
 }
 
+async function pollRoom(room) {
+  try {
+    const { stdout } = await execFileP(
+      "curl",
+      [
+        "-s", "-X", "POST", API,
+        "-H", `apikey: ${ANON}`,
+        "-H", `Authorization: Bearer ${room.token}`,
+        "-H", "Content-Type: application/json",
+        // our own cursor => server won't move the shared last_read
+        "-d", JSON.stringify({ action: "read", since: room.last_seen || FLOOR }),
+      ],
+      { timeout: 10000 }
+    );
+    const data = JSON.parse(stdout);
+    return Array.isArray(data?.messages) ? data.messages : [];
+  } catch {
+    return null; // network/parse hiccup -> skip this room, leave its cursor
+  }
+}
+
 async function main() {
   let input = {};
   try { input = JSON.parse((await readStdin()) || "{}"); } catch {}
@@ -45,47 +75,48 @@ async function main() {
 
   let state;
   try { state = JSON.parse(readFileSync(STATE, "utf8")); } catch { return allowStop(); }
-  if (!state?.token || state.watch !== true) return allowStop(); // not connected / paused
+  if (state.watch !== true) return allowStop(); // paused
 
-  // Shell out to curl (portable across TLS/proxy setups; same call the /ping command uses).
-  let msgs = [];
-  try {
-    const { stdout } = await execFileP(
-      "curl",
-      [
-        "-s", "-X", "POST", API,
-        "-H", `apikey: ${ANON}`,
-        "-H", `Authorization: Bearer ${state.token}`,
-        "-H", "Content-Type: application/json",
-        // Pass OUR own cursor so the server doesn't advance the shared last_read
-        // that the agent's interactive ping_read / ping_wait rely on.
-        "-d", JSON.stringify({ action: "read", since: state.last_seen || FLOOR }),
-      ],
-      { timeout: 10000 }
-    );
-    const data = JSON.parse(stdout);
-    msgs = Array.isArray(data?.messages) ? data.messages : [];
-  } catch { return allowStop(); } // network/parse hiccup -> never disrupt the session
+  const rooms = roomsOf(state);
+  if (!rooms.length) return allowStop();
 
-  // First run: set cursor to newest existing message (treat history as already seen)
-  if (!state.last_seen) {
-    const newest = msgs.reduce((a, m) => ((m.created_at || "") > a ? m.created_at : a), FLOOR);
-    writeState({ ...state, last_seen: newest });
-    return allowStop();
+  const results = await Promise.all(rooms.map((r) => pollRoom(r)));
+
+  let changed = false;
+  let anyFresh = false;
+  const blocks = [];
+  const next = rooms.map((r) => ({ ...r }));
+
+  for (let i = 0; i < rooms.length; i++) {
+    const room = rooms[i];
+    const msgs = results[i];
+    if (msgs === null) continue; // failed poll
+
+    if (!room.last_seen) {
+      // First sight of this room: treat existing history as already seen.
+      next[i].last_seen = msgs.reduce((a, m) => ((m.created_at || "") > a ? m.created_at : a), FLOOR);
+      changed = true;
+      continue;
+    }
+    const fresh = msgs.filter((m) => m && m.mine === false && (m.created_at || "") > room.last_seen);
+    if (fresh.length) {
+      next[i].last_seen = fresh.reduce((a, m) => (m.created_at > a ? m.created_at : a), room.last_seen);
+      changed = true;
+      anyFresh = true;
+      const lines = fresh.map((m) => `    [${m.from}] ${m.text}`).join("\n");
+      blocks.push(`  ${room.group || "group"}:\n${lines}`);
+    }
   }
 
-  const fresh = msgs.filter((m) => m && m.mine === false && (m.created_at || "") > state.last_seen);
-  if (fresh.length === 0) return allowStop();
+  if (changed) writeState({ ...state, watch: true, rooms: next });
+  if (!anyFresh) return allowStop();
 
-  const newest = fresh.reduce((a, m) => (m.created_at > a ? m.created_at : a), state.last_seen);
-  writeState({ ...state, last_seen: newest }); // advance cursor so we never re-deliver
-
-  const lines = fresh.map((m) => `  [${m.from}] ${m.text}`).join("\n");
+  const activeHint = state.active ? ` (your active room is "${state.active}")` : "";
   const reason =
-    `📨 New message${fresh.length > 1 ? "s" : ""} in your Ping room "${state.group || "group"}":\n` +
-    `${lines}\n\n` +
-    `If a reply makes sense, use the ping_say tool (ping MCP) to answer in the room. ` +
-    `If nothing is needed, you can stop.`;
+    `📨 New Ping message${blocks.length > 1 || blocks.join("").split("[").length > 2 ? "s" : ""}:\n` +
+    `${blocks.join("\n")}\n\n` +
+    `Reply with the ping_say tool to post in your active room${activeHint}. ` +
+    `To reply in a different room, run /ping <that room's link> first, then ping_say. If nothing is needed, you can stop.`;
 
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
   process.exit(0);
