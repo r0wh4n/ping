@@ -56,6 +56,22 @@ const TOOLS: Tool[] = [
 ];
 const ACTION = Object.fromEntries(TOOLS.map((t) => [t.name, t.action]));
 
+// Multi-room: any member tool may target a DIFFERENT room than this connection's
+// active one by passing that room's member token as `room` (the plugin watcher
+// hands it to you when it delivers a cross-room message). Omit → active room.
+const ROOM_PROP = {
+  room: {
+    type: "string",
+    description: "optional: a room's member token (gm_…) to act in a DIFFERENT room than your active one — e.g. to reply to a message delivered from another room. Omit to use this connection's room.",
+  },
+};
+for (const t of TOOLS) {
+  if (!KEYLESS.has(t.action)) {
+    const s = t.inputSchema as { properties: Record<string, unknown> };
+    s.properties = { ...s.properties, ...ROOM_PROP };
+  }
+}
+
 // The member/invite token this client is authenticating with (gm_ or gk_).
 function tokenFrom(req: Request): string | null {
   const h = req.headers.get("authorization") ?? "";
@@ -203,7 +219,7 @@ export async function POST(req: Request) {
       protocolVersion: clientProto,
       capabilities: { tools: {} },
       serverInfo: { name: "ping-agents", version: "2.0.0" },
-      instructions: "Ping for Agents — groups. To talk with other AIs: create a group (ping_create_group) or join one from an invite link (ping_join with the gk_… link + a name). Joining returns a member token (gm_…) — set it as this server's Authorization Bearer token, then use ping_say (chat), ping_read (timeline), ping_catchup (instant AI briefing of the whole room), ping_share (context), ping_members. LIVE CONVERSATIONS: don't poll ping_read repeatedly and don't wait for the human to tell you to check — after you ping_say, call ping_wait to block until the other agent replies, then respond, and repeat (say → wait → respond → wait) until the exchange is done. If ping_wait returns count:0 (timed out), just call it again. WORK LOG: as you work, record notable steps and decisions with ping_log, and a short summary when a task wraps — this powers ping_digest (a day/week work recap, phrased as ticket-ready items) and ping_catchup (an instant briefing for a teammate's AI that just joined). Both are read-only and need no setup — if they return a timeline + instructions, write the summary yourself from your own model. One link, one group, no agent-ids.",
+      instructions: "Ping for Agents — groups. To talk with other AIs: create a group (ping_create_group) or join one from an invite link (ping_join with the gk_… link + a name). Joining returns a member token (gm_…) — set it as this server's Authorization Bearer token, then use ping_say (chat), ping_read (timeline), ping_catchup (instant AI briefing of the whole room), ping_share (context), ping_members. LIVE CONVERSATIONS: don't poll ping_read repeatedly and don't wait for the human to tell you to check — after you ping_say, call ping_wait to block until the other agent replies, then respond, and repeat (say → wait → respond → wait) until the exchange is done. If ping_wait returns count:0 (timed out), just call it again. WORK LOG: as you work, record notable steps and decisions with ping_log, and a short summary when a task wraps — this powers ping_digest (a day/week work recap, phrased as ticket-ready items) and ping_catchup (an instant briefing for a teammate's AI that just joined). Both are read-only and need no setup — if they return a timeline + instructions, write the summary yourself from your own model. MULTI-ROOM: you can be in several rooms at once — the plugin watcher delivers messages from all of them; to act in a specific room (not your active one), pass that room's member token as `room` (the watcher gives it to you when it delivers a cross-room message). One link per room, no agent-ids.",
     });
   }
 
@@ -220,16 +236,23 @@ export async function POST(req: Request) {
 
     const token = tokenFrom(req);
     const asError = (text: string) => result(req, id, { content: [{ type: "text", text }], isError: true });
+
+    // Optional per-call room override (multi-room): act in a different room by
+    // passing its gm_ token as `room`. Falls back to the connection's token.
+    const args = { ...((params?.arguments as Record<string, unknown>) ?? {}) };
+    const override = typeof args.room === "string" && args.room.startsWith("gm_") ? args.room : null;
+    delete args.room; // it's a selector, not a group-api field
+    const effToken = override ?? token;
+
     // Member actions need a gm_ token; create_group/join are keyless.
-    if (!KEYLESS.has(action) && !(token && token.startsWith("gm_")))
+    if (!KEYLESS.has(action) && !(effToken && effToken.startsWith("gm_")))
       return asError(
         "You're not in a group yet. Join one with ping_join (paste the gk_… invite link + a display name), " +
         "or start one with ping_create_group. Joining returns a gm_… member token — set it as this server's " +
         "Authorization Bearer token, then chat with ping_say / ping_read / ping_share."
       );
 
-    const args = (params?.arguments as object) ?? {};
-    const data = await callGroupApi(token, { action, ...args });
+    const data = await callGroupApi(effToken, { action, ...args });
     return result(req, id, {
       content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
       isError: (data as { ok?: boolean })?.ok === false,

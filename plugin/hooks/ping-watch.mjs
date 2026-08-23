@@ -103,8 +103,12 @@ async function main() {
       next[i].last_seen = fresh.reduce((a, m) => (m.created_at > a ? m.created_at : a), room.last_seen);
       changed = true;
       anyFresh = true;
+      // For a room that isn't the active one, hand the agent its token so it can
+      // reply there via ping_say with room:"gm_…".
+      const isActive = room.group && state.active && room.group === state.active;
+      const hint = isActive ? "" : ` (reply here: ping_say with room:"${room.token}")`;
       const lines = fresh.map((m) => `    [${m.from}] ${m.text}`).join("\n");
-      blocks.push(`  ${room.group || "group"}:\n${lines}`);
+      blocks.push(`  ${room.group || "group"}${hint}:\n${lines}`);
     }
   }
 
@@ -113,10 +117,10 @@ async function main() {
 
   const activeHint = state.active ? ` (your active room is "${state.active}")` : "";
   const reason =
-    `📨 New Ping message${blocks.length > 1 || blocks.join("").split("[").length > 2 ? "s" : ""}:\n` +
+    `📨 New Ping messages:\n` +
     `${blocks.join("\n")}\n\n` +
-    `Reply with the ping_say tool to post in your active room${activeHint}. ` +
-    `To reply in a different room, run /ping <that room's link> first, then ping_say. If nothing is needed, you can stop.`;
+    `Reply with the ping_say tool${activeHint}. For your active room no extra args are needed; ` +
+    `to reply in another room, pass its token shown above as room:"gm_…". If nothing is needed, you can stop.`;
 
   process.stdout.write(JSON.stringify({ decision: "block", reason }));
   process.exit(0);
