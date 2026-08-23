@@ -33,6 +33,19 @@ const ClockIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
     <path d="M12 7v5l3 2" />
   </svg>
 );
+const SendIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M22 2 11 13" />
+    <path d="M22 2 15 22l-4-9-9-4 20-7z" />
+  </svg>
+);
+// View-once "snap" — a capture ring, distinct from the plain camera.
+const SnapIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
+  <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
+    <circle cx="12" cy="12" r="9" />
+    <circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none" />
+  </svg>
+);
 
 // Compact monochrome voice-note player. Falls back to the stored duration when
 // the browser reports Infinity for MediaRecorder webm blobs (a known quirk).
@@ -99,6 +112,7 @@ export default function DMPage() {
     messages,
     friendActive,
     friendTyping,
+    friendSeenAt,
     friendStatus,
     clearAfter,
     pinnedId,
@@ -106,6 +120,9 @@ export default function DMPage() {
     send,
     sendImage,
     sendVoice,
+    sendSnap,
+    openSnap,
+    saveSnap,
     react,
     setTyping,
     setTimer,
@@ -120,10 +137,14 @@ export default function DMPage() {
   } = useDM(profile, handle);
 
   const [draft, setDraft] = useState("");
+  const [inputFocused, setInputFocused] = useState(false);
   const [activeMsg, setActiveMsg] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<DMsg | null>(null);
   const [uploading, setUploading] = useState(false);
   const [imgErr, setImgErr] = useState<string | null>(null);
+  // Snap (view-once media) viewer overlay + hidden picker.
+  const [snapView, setSnapView] = useState<{ url: string; kind: "image" | "video" } | null>(null);
+  const snapRef = useRef<HTMLInputElement>(null);
 
   // safety: overflow menu, block, report
   const [menuOpen, setMenuOpen] = useState(false);
@@ -269,6 +290,30 @@ export default function DMPage() {
     else setReplyTo(null);
     setUploading(false);
   };
+
+  const onPickSnap = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setUploading(true);
+    setImgErr(null);
+    const res = await sendSnap(file);
+    if (!res.ok) setImgErr(res.error ?? "Couldn't send snap.");
+    setUploading(false);
+  };
+
+  // Open a received snap in the fullscreen viewer (records the view).
+  const openViewer = async (m: DMsg) => {
+    const r = await openSnap(m.id);
+    if (r) setSnapView(r);
+  };
+
+  // Photos auto-close after 10s (Snapchat-style); videos close when they end.
+  useEffect(() => {
+    if (!snapView || snapView.kind !== "image") return;
+    const t = setTimeout(() => setSnapView(null), 10000);
+    return () => clearTimeout(t);
+  }, [snapView]);
 
   if (!ready || !profile) return <main className="min-h-dvh" />;
 
@@ -517,7 +562,50 @@ export default function DMPage() {
             )}
 
             {/* bubble — tap to open reaction / reply actions */}
-            {m.audio ? (
+            {m.ephemeral && !m.saved ? (
+              (() => {
+                const canView = !m.mine && (m.views ?? 0) < 2;
+                const label = m.snapKind === "video" ? "Video" : "Photo";
+                const status = m.mine
+                  ? m.openedAt
+                    ? "Opened"
+                    : "Delivered"
+                  : (m.views ?? 0) === 0
+                    ? "Tap to view"
+                    : (m.views ?? 0) < 2
+                      ? "Tap to replay"
+                      : "Opened";
+                return (
+                  <button
+                    onClick={() => (canView ? openViewer(m) : setActiveMsg(activeMsg === m.id ? null : m.id))}
+                    className={`flex max-w-[78%] items-center gap-3 rounded-2xl border px-4 py-3 text-left transition ${
+                      canView
+                        ? "border-[color:var(--accent)] bg-[color:var(--panel)] hover:opacity-90"
+                        : "border-border bg-[color:var(--panel)] opacity-80"
+                    }`}
+                  >
+                    <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full border border-[color:var(--border-strong)] text-muted">
+                      <SnapIcon className="h-5 w-5" />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="mono block text-sm text-text">
+                        {m.mine ? `You sent a ${label.toLowerCase()}` : `${label} snap`}
+                      </span>
+                      <span className="block text-xs text-[color:var(--faint)]">{status}</span>
+                    </span>
+                  </button>
+                );
+              })()
+            ) : m.video ? (
+              <div className="msg-in max-w-[78%]">
+                <video
+                  src={m.video}
+                  controls
+                  playsInline
+                  className="max-h-72 w-auto rounded-2xl border border-border"
+                />
+              </div>
+            ) : m.audio ? (
               <div
                 onClick={() => setActiveMsg(activeMsg === m.id ? null : m.id)}
                 className="msg-in max-w-[78%] cursor-pointer"
@@ -618,6 +706,20 @@ export default function DMPage() {
                 >
                   Reply
                 </button>
+                {m.ephemeral && !m.saved && (
+                  <>
+                    <span className="mx-1 h-4 w-px bg-[color:var(--border-strong)]" />
+                    <button
+                      onClick={() => {
+                        saveSnap(m.id);
+                        setActiveMsg(null);
+                      }}
+                      className="px-2 text-xs text-muted transition hover:text-text"
+                    >
+                      Save to chat
+                    </button>
+                  </>
+                )}
                 <span className="mx-1 h-4 w-px bg-[color:var(--border-strong)]" />
                 <button
                   onClick={() => {
@@ -660,6 +762,15 @@ export default function DMPage() {
             )}
           </div>
         ))}
+
+        {(() => {
+          const last = messages[messages.length - 1];
+          const seen =
+            last?.mine && friendSeenAt && new Date(friendSeenAt).getTime() >= new Date(last.created_at).getTime();
+          return seen ? (
+            <span className="mono self-end pr-1 text-[10px] text-[color:var(--faint)]">Seen</span>
+          ) : null;
+        })()}
 
         {friendTyping && (
           <div className="msg-in self-start rounded-2xl border border-border bg-[color:var(--panel)] px-4 py-3">
@@ -727,24 +838,14 @@ export default function DMPage() {
             className="hidden"
             onChange={onPickImage}
           />
-          <button
-            onClick={() => fileRef.current?.click()}
-            disabled={status !== "ready" || uploading}
-            title="Send a photo"
-            aria-label="Send a photo"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40"
-          >
-            {uploading ? "…" : <CameraIcon />}
-          </button>
-          <button
-            onClick={startRec}
-            disabled={status !== "ready" || uploading}
-            title="Record a voice note"
-            aria-label="Record a voice note"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40"
-          >
-            <MicIcon />
-          </button>
+          <input
+            type="file"
+            accept="image/*,video/*"
+            capture="environment"
+            ref={snapRef}
+            className="hidden"
+            onChange={onPickSnap}
+          />
           <button
             onClick={() => {
               setSchedErr(null);
@@ -753,7 +854,7 @@ export default function DMPage() {
             disabled={status !== "ready" || !draft.trim()}
             title="Schedule this message"
             aria-label="Schedule this message"
-            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40"
+            className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40"
           >
             <ClockIcon />
           </button>
@@ -763,19 +864,93 @@ export default function DMPage() {
               setDraft(e.target.value);
               setTyping(true);
             }}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setInputFocused(false)}
             onKeyDown={(e) => e.key === "Enter" && onSend()}
             disabled={status !== "ready"}
             maxLength={2000}
             placeholder={status === "ready" ? "Message @" + handle + "…" : "…"}
-            className="mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+            className="mono min-h-[52px] min-w-0 flex-1 rounded-3xl border border-border bg-[color:var(--panel)] px-5 py-4 text-base outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
           />
+          {/* Camera + voice collapse once the field is focused, leaving just
+              schedule + send. Blur (tap elsewhere) brings them back. */}
+          <button
+            onClick={() => fileRef.current?.click()}
+            disabled={status !== "ready" || uploading}
+            title="Send a photo"
+            aria-label="Send a photo"
+            className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
+          >
+            {uploading ? "…" : <CameraIcon />}
+          </button>
+          <button
+            onClick={startRec}
+            disabled={status !== "ready" || uploading}
+            title="Record a voice note"
+            aria-label="Record a voice note"
+            className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
+          >
+            <MicIcon />
+          </button>
+          <button
+            onClick={() => snapRef.current?.click()}
+            disabled={status !== "ready" || uploading}
+            title="Send a view-once snap (photo or video)"
+            aria-label="Send a view-once snap"
+            className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
+          >
+            {uploading ? "…" : <SnapIcon />}
+          </button>
           <button
             onClick={onSend}
             disabled={status !== "ready" || !draft.trim()}
-            className="btn shrink-0 px-5 py-3 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Send"
+            aria-label="Send message"
+            className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[color:var(--accent)] text-[color:var(--on-accent)] transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            Send
+            <SendIcon />
           </button>
+        </div>
+      )}
+
+      {/* Snap viewer — fullscreen, view-once. Tap or timeout to close. */}
+      {snapView && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black"
+          onClick={() => setSnapView(null)}
+        >
+          <div className="relative flex max-h-full max-w-full items-center justify-center">
+            {snapView.kind === "video" ? (
+              <video
+                src={snapView.url}
+                autoPlay
+                playsInline
+                onEnded={() => setSnapView(null)}
+                className="max-h-[100dvh] max-w-full"
+              />
+            ) : (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={snapView.url} alt="Snap" className="max-h-[100dvh] max-w-full object-contain" />
+            )}
+            <span className="wm" aria-hidden>
+              {Array.from({ length: 24 }).map((_, i) => (
+                <span key={i}>@{profile.username}</span>
+              ))}
+            </span>
+          </div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              setSnapView(null);
+            }}
+            aria-label="Close"
+            className="absolute right-4 top-[max(1rem,env(safe-area-inset-top))] grid h-10 w-10 place-items-center rounded-full bg-white/10 text-lg text-white backdrop-blur transition hover:bg-white/20"
+          >
+            ✕
+          </button>
+          <span className="pointer-events-none absolute bottom-6 left-0 right-0 text-center text-xs text-white/50">
+            Tap anywhere to close
+          </span>
         </div>
       )}
     </main>

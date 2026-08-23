@@ -1,11 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect } from "react";
+import { useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 import gsap from "gsap";
 import { ScrollTrigger } from "gsap/ScrollTrigger";
 import Lenis from "lenis";
 import { useHandleCount } from "@/hooks/useHandleCount";
+import { supabase } from "@/lib/supabase";
 import ThemeToggle from "@/components/ThemeToggle";
 import TiltCard from "@/components/TiltCard";
 import { Terminal, AnimatedSpan, TypingAnimation } from "@/components/Terminal";
@@ -59,8 +61,33 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
 
 export default function Home() {
   const handles = useHandleCount();
+  const router = useRouter();
+
+  // Signed-in visitors have no use for the marketing page, so send them to the
+  // app — and NEVER render this page for them (no flash). We stay "unknown"
+  // (blank holding frame) until auth resolves, then either redirect or show the
+  // marketing page. onAuthStateChange fires INITIAL_SESSION, so it catches the
+  // session even when the immediate getSession() races ahead of storage.
+  const [authState, setAuthState] = useState<"unknown" | "in" | "out">("unknown");
+  useEffect(() => {
+    let settled = false;
+    const decide = (session: { user?: unknown } | null) => {
+      if (settled) return;
+      if (session?.user) {
+        settled = true;
+        setAuthState("in");
+        router.replace("/app");
+      } else {
+        setAuthState("out");
+      }
+    };
+    supabase.auth.getSession().then(({ data: { session } }) => decide(session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_e, session) => decide(session));
+    return () => sub.subscription.unsubscribe();
+  }, [router]);
 
   useEffect(() => {
+    if (authState !== "out") return; // marketing DOM only exists once we show it
     if (typeof window === "undefined") return;
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
     if (reduced) return;
@@ -87,7 +114,11 @@ export default function Home() {
       lenis.destroy();
       ScrollTrigger.getAll().forEach((t) => t.kill());
     };
-  }, []);
+  }, [authState]);
+
+  // Blank holding frame until we KNOW you're signed out. Signed-in visitors are
+  // redirected to /app and never see the marketing page (no flash).
+  if (authState !== "out") return <main className="min-h-dvh bg-[color:var(--bg)]" />;
 
   return (
     <main id="top">

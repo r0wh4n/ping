@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import { normalizeUsername, validateUsername } from "@/lib/username";
 import {
@@ -30,6 +30,7 @@ const emailFor = (username: string) => `${username.replace(/_/g, "-")}@theping.c
 export function useProfile() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [ready, setReady] = useState(false);
+  const joinedHQ = useRef<Set<string>>(new Set()); // ensure Ping HQ membership once per user/session
 
   const loadProfile = useCallback(async (userId: string) => {
     const { data } = await supabase
@@ -37,7 +38,14 @@ export function useProfile() {
       .select("id,username")
       .eq("id", userId)
       .maybeSingle();
-    if (data) setProfile({ id: String(data.id), username: String(data.username) });
+    if (data) {
+      setProfile({ id: String(data.id), username: String(data.username) });
+      // Everyone lands in the Ping HQ community group so the app is never empty.
+      if (!joinedHQ.current.has(userId)) {
+        joinedHQ.current.add(userId);
+        void supabase.rpc("join_ping_hq");
+      }
+    }
     // Session restore (no password available) → recover the E2E identity from cache.
     loadCachedIdentity(userId);
   }, []);

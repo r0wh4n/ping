@@ -26,6 +26,9 @@ yarn-debug.log*
 # vercel
 .vercel
 
+# confidential — deployed (noindex) but kept out of the public repo
+/src/app/business
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
