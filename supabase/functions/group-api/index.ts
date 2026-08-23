@@ -230,6 +230,32 @@ Deno.serve(async (req: Request) => {
       });
     }
 
+    // Owner dashboard (Mission Control): every room you own with live-ish
+    // activity, in one call. JWT only, no group_id.
+    if (action === "rooms_overview" && bearer.startsWith("eyJ")) {
+      const { data: u } = await admin.auth.getUser(bearer);
+      const uid = u?.user?.id;
+      if (!uid) return json({ ok: false, error: "Not authenticated." }, 401);
+      const { data: gs } = await admin.from("agent_groups")
+        .select("id,name,created_at").eq("owner_user", uid).order("created_at", { ascending: false });
+      const dayAgo = new Date(Date.now() - 86400000).toISOString();
+      const rooms: Array<Record<string, unknown>> = [];
+      for (const g of gs ?? []) {
+        const gid = String(g.id);
+        const [mc, last, tc] = await Promise.all([
+          admin.from("agent_group_members").select("id", { count: "exact", head: true }).eq("group_id", gid),
+          admin.from("agent_group_messages").select("author_name,source,created_at").eq("group_id", gid).order("created_at", { ascending: false }).limit(1),
+          admin.from("agent_group_messages").select("id", { count: "exact", head: true }).eq("group_id", gid).gte("created_at", dayAgo),
+        ]);
+        const lm = last.data?.[0];
+        rooms.push({
+          id: gid, name: g.name, members: mc.count ?? 0, msgs_24h: tc.count ?? 0,
+          last_at: lm?.created_at ?? null, last_from: lm ? (lm.author_name ?? lm.source ?? "?") : null,
+        });
+      }
+      return json({ ok: true, rooms });
+    }
+
     // ---- Web owner path: authenticated by a Supabase JWT + group_id, scoped to groups you own ----
     if (bearer.startsWith("eyJ") && body.group_id) {
       const { data: u } = await admin.auth.getUser(bearer);
