@@ -272,6 +272,18 @@ Deno.serve(async (req: Request) => {
           .eq("group_id", gid).order("created_at", { ascending: true }).limit(300);
         return json({ ok: true, group, count: (rows ?? []).length, messages: await shape(admin, rows ?? [], "") });
       }
+      if (action === "history") {
+        const before = body.before ? new Date(String(body.before)).toISOString() : null;
+        const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200);
+        let hq = admin.from("agent_group_messages")
+          .select("id, member_id, author_name, kind, title, body, created_at, source")
+          .eq("group_id", gid).order("created_at", { ascending: false }).limit(limit);
+        if (before) hq = hq.lt("created_at", before);
+        const { data: hrows } = await hq;
+        const desc = hrows ?? [];
+        const asc = [...desc].reverse();
+        return json({ ok: true, group, count: asc.length, has_more: desc.length === limit, next_before: desc.length ? desc[desc.length - 1].created_at : null, messages: await shape(admin, asc, "") });
+      }
       if (action === "note") {
         const text = String(body.text ?? body.content ?? "").trim();
         if (!text) return json({ ok: false, error: "Nothing to add." });
@@ -396,6 +408,21 @@ Deno.serve(async (req: Request) => {
         await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
       }
       return json({ ok: true, group: await groupName(admin, gid), count: msgs.length, messages: await shape(admin, msgs, meId) });
+    }
+    if (action === "history") {
+      // Page BACKWARD through the timeline (older than `before`). Read-only —
+      // never advances last_read. Returns oldest→newest with a next_before cursor.
+      if (await limited(admin, "read:" + meId, RL.read)) return rlError("reads");
+      const before = body.before ? new Date(String(body.before)).toISOString() : null;
+      const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200);
+      let hq = admin
+        .from("agent_group_messages").select("id, member_id, author_name, kind, title, body, created_at, source")
+        .eq("group_id", gid).order("created_at", { ascending: false }).limit(limit);
+      if (before) hq = hq.lt("created_at", before);
+      const { data: hrows } = await hq;
+      const desc = hrows ?? [];
+      const asc = [...desc].reverse();
+      return json({ ok: true, group: await groupName(admin, gid), count: asc.length, has_more: desc.length === limit, next_before: desc.length ? desc[desc.length - 1].created_at : null, messages: await shape(admin, asc, meId) });
     }
     if (action === "catchup") {
       const group = (await groupName(admin, gid)) ?? "this group";

@@ -32,7 +32,11 @@ export default function FleetPage() {
   const [msgs, setMsgs] = useState<Msg[]>([]);
   const [loading, setLoading] = useState(false);
   const [tick, setTick] = useState(0);
+  const [noMore, setNoMore] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
+  const nearBottom = useRef(true);
+  const prevHeight = useRef<number | null>(null);
 
   const loadRooms = useCallback(async () => {
     const { data } = await supabase.functions.invoke("group-api", { body: { action: "rooms_overview" } });
@@ -55,7 +59,15 @@ export default function FleetPage() {
 
   const loadTimeline = useCallback(async (gid: string) => {
     const { data } = await supabase.functions.invoke("group-api", { body: { action: "timeline", group_id: gid } });
-    if (data?.ok && Array.isArray(data.messages)) setMsgs(data.messages as Msg[]);
+    if (data?.ok && Array.isArray(data.messages)) {
+      const fresh = data.messages as Msg[];
+      setMsgs((cur) => {
+        if (!fresh.length) return cur;
+        const cutoff = fresh[0].created_at; // keep any older history we've paged in below the live window
+        const older = cur.filter((m) => m.created_at < cutoff);
+        return [...older, ...fresh];
+      });
+    }
     setTick((t) => t + 1);
   }, []);
 
@@ -64,6 +76,8 @@ export default function FleetPage() {
     let stopped = false;
     setLoading(true);
     setMsgs([]);
+    setNoMore(false);
+    nearBottom.current = true;
     loadTimeline(active).finally(() => !stopped && setLoading(false));
     const id = setInterval(() => !stopped && loadTimeline(active), TIMELINE_MS);
     return () => {
@@ -74,8 +88,32 @@ export default function FleetPage() {
 
   useEffect(() => {
     const el = listRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (!el) return;
+    if (prevHeight.current !== null) {
+      el.scrollTop = el.scrollHeight - prevHeight.current; // keep viewport stable after prepending older
+      prevHeight.current = null;
+    } else if (nearBottom.current) {
+      el.scrollTop = el.scrollHeight; // follow live only when already at the bottom
+    }
   }, [msgs]);
+
+  const loadOlder = async () => {
+    const oldest = msgs[0]?.created_at;
+    if (!active || loadingOlder || noMore || !oldest) return;
+    setLoadingOlder(true);
+    prevHeight.current = listRef.current?.scrollHeight ?? 0;
+    const { data } = await supabase.functions.invoke("group-api", {
+      body: { action: "history", group_id: active, before: oldest, limit: 100 },
+    });
+    if (data?.ok && Array.isArray(data.messages)) {
+      const older = data.messages as Msg[];
+      if (older.length) setMsgs((cur) => [...older, ...cur]);
+      if (!data.has_more || older.length === 0) setNoMore(true);
+    } else {
+      prevHeight.current = null;
+    }
+    setLoadingOlder(false);
+  };
 
   const participants = useMemo(() => [...new Set(msgs.map((m) => m.from).filter(Boolean))], [msgs]);
   const activeRoom = rooms.find((r) => r.id === active);
@@ -179,7 +217,23 @@ export default function FleetPage() {
               <span key={tick} className="live-dot shrink-0" title="Live" />
             </div>
 
-            <div ref={listRef} className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6">
+            <div
+              ref={listRef}
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                nearBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+              }}
+              className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6"
+            >
+              {msgs.length > 0 && !noMore && (
+                <button
+                  onClick={loadOlder}
+                  disabled={loadingOlder}
+                  className="mx-auto block rounded-full border border-border px-3 py-1 text-xs text-muted transition hover:text-text disabled:opacity-50"
+                >
+                  {loadingOlder ? "Loading…" : "↑ Load older"}
+                </button>
+              )}
               {loading && msgs.length === 0 ? (
                 <p className="mono text-sm text-[color:var(--faint)]">Loading…</p>
               ) : msgs.length === 0 ? (
