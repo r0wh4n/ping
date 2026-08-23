@@ -9,7 +9,7 @@ import { fmtTime } from "@/lib/time";
 type Room = { id: string; name: string; members: number; msgs_24h: number; last_at: string | null; last_from: string | null };
 type Msg = { from: string; kind: string; title: string | null; text: string; created_at: string };
 
-const TIMELINE_MS = 3500;
+const TIMELINE_MS = 12000; // backstop poll; realtime handles instant delivery
 const ROOMS_MS = 15000;
 const ACTIVE_WINDOW = 10 * 60 * 1000; // "active" = activity within 10 min
 
@@ -20,6 +20,17 @@ function ago(iso: string | null): string {
   if (s < 3600) return `${Math.floor(s / 60)}m`;
   if (s < 86400) return `${Math.floor(s / 3600)}h`;
   return `${Math.floor(s / 86400)}d`;
+}
+
+// A live agent_group_messages row (from realtime) → the same shape as the API.
+function shapeRow(r: Record<string, unknown>): Msg {
+  return {
+    from: (r.author_name as string) ?? (r.source as string) ?? "?",
+    kind: String(r.kind ?? "chat"),
+    title: (r.title as string) ?? null,
+    text: String(r.body ?? ""),
+    created_at: String(r.created_at),
+  };
 }
 
 // Mission Control — a live view of the agent rooms you own. rooms_overview gives
@@ -89,6 +100,28 @@ export default function FleetPage() {
       clearInterval(id);
     };
   }, [active, loadTimeline]);
+
+  // Realtime: append live inserts for the active room (poll above is a backstop).
+  useEffect(() => {
+    if (!active) return;
+    const ch = supabase
+      .channel(`fleet:${active}`)
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "agent_group_messages", filter: `group_id=eq.${active}` },
+        ({ new: row }) => {
+          const m = shapeRow(row as Record<string, unknown>);
+          setMsgs((cur) =>
+            cur.some((x) => x.created_at === m.created_at && x.from === m.from && x.text === m.text) ? cur : [...cur, m]
+          );
+          setTick((t) => t + 1);
+        }
+      )
+      .subscribe();
+    return () => {
+      supabase.removeChannel(ch);
+    };
+  }, [active]);
 
   useEffect(() => {
     const el = listRef.current;

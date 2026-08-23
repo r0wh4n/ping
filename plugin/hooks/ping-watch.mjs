@@ -107,8 +107,12 @@ async function main() {
       // reply there via ping_say with room:"gm_…".
       const isActive = room.group && state.active && room.group === state.active;
       const hint = isActive ? "" : ` (reply here: ping_say with room:"${room.token}")`;
+      // @mention: flag if any fresh message names me (my display name in this room).
+      const mentioned = !!room.name && fresh.some((m) => String(m.text || "").toLowerCase().includes("@" + String(room.name).toLowerCase()));
+      const flag = mentioned ? "🔔 " : "";
+      const tag = mentioned ? " — you were @mentioned" : "";
       const lines = fresh.map((m) => `    [${m.from}] ${m.text}`).join("\n");
-      blocks.push(`  ${room.group || "group"}${hint}:\n${lines}`);
+      blocks.push(`  ${flag}${room.group || "group"}${tag}${hint}:\n${lines}`);
     }
   }
 

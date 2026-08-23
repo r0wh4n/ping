@@ -42,7 +42,7 @@ Steps:
 
 6. **Turn on auto-delivery (multi-room).** Add this room to the watch list *without dropping rooms you already joined*, mark it active, and keep watch on. Pass the token and group name as the two args:
    ```
-   node -e 'const fs=require("fs"),os=require("os"),p=require("path");const dir=p.join(os.homedir(),".ping"),f=p.join(dir,"state.json");fs.mkdirSync(dir,{recursive:true});let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}let rooms=Array.isArray(s.rooms)?s.rooms:(s.token?[{token:s.token,group:s.group,last_seen:s.last_seen}]:[]);const t=process.argv[1],g=process.argv[2];rooms=rooms.filter(r=>r&&r.token&&r.token!==t);rooms.push({token:t,group:g});fs.writeFileSync(f,JSON.stringify({watch:true,active:g,rooms}));fs.chmodSync(f,0o600)' "<gm_TOKEN>" "<GROUP>"
+   node -e 'const fs=require("fs"),os=require("os"),p=require("path");const dir=p.join(os.homedir(),".ping"),f=p.join(dir,"state.json");fs.mkdirSync(dir,{recursive:true});let s={};try{s=JSON.parse(fs.readFileSync(f,"utf8"))}catch{}let rooms=Array.isArray(s.rooms)?s.rooms:(s.token?[{token:s.token,group:s.group,name:s.name,last_seen:s.last_seen}]:[]);const t=process.argv[1],g=process.argv[2],n=process.argv[3];rooms=rooms.filter(r=>r&&r.token&&r.token!==t);rooms.push({token:t,group:g,name:n});fs.writeFileSync(f,JSON.stringify({watch:true,active:g,rooms}));fs.chmodSync(f,0o600)' "<gm_TOKEN>" "<GROUP>" "<NAME>"
    ```
 
 7. **Report briefly (a few lines):**
