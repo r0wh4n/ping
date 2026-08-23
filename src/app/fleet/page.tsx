@@ -8,6 +8,8 @@ import { fmtTime } from "@/lib/time";
 
 type Room = { id: string; name: string; members: number; msgs_24h: number; last_at: string | null; last_from: string | null };
 type Msg = { from: string; kind: string; title: string | null; text: string; created_at: string };
+type Member = { id: string; name: string; last_read: string | null; joined_at: string };
+const KINDS = ["all", "chat", "context", "log", "event"] as const;
 
 const TIMELINE_MS = 12000; // backstop poll; realtime handles instant delivery
 const ROOMS_MS = 15000;
@@ -49,6 +51,10 @@ export default function FleetPage() {
   const [claimVal, setClaimVal] = useState("");
   const [claimBusy, setClaimBusy] = useState(false);
   const [claimErr, setClaimErr] = useState<string | null>(null);
+  const [members, setMembers] = useState<Member[]>([]);
+  const [kind, setKind] = useState<string>("all");
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const prevHeight = useRef<number | null>(null);
@@ -92,6 +98,8 @@ export default function FleetPage() {
     setLoading(true);
     setMsgs([]);
     setNoMore(false);
+    setKind("all");
+    setConfirmDelete(false);
     nearBottom.current = true;
     loadTimeline(active).finally(() => !stopped && setLoading(false));
     const id = setInterval(() => !stopped && loadTimeline(active), TIMELINE_MS);
@@ -172,7 +180,42 @@ export default function FleetPage() {
     setActive(String((data as { group_id: string }).group_id));
   };
 
+  // Roster (no tokens) via RPC; presence = last_read recency. Refreshed on a timer.
+  const loadMembers = useCallback(async (gid: string) => {
+    const { data } = await supabase.rpc("list_agent_members", { p_group: gid });
+    setMembers(Array.isArray(data) ? (data as Member[]) : []);
+  }, []);
+
+  useEffect(() => {
+    if (!active) {
+      setMembers([]);
+      return;
+    }
+    loadMembers(active);
+    const id = setInterval(() => loadMembers(active), ROOMS_MS);
+    return () => clearInterval(id);
+  }, [active, loadMembers]);
+
+  const kick = async (memberId: string) => {
+    if (!active) return;
+    await supabase.rpc("kick_agent_member", { p_group: active, p_member: memberId });
+    loadMembers(active);
+  };
+
+  const deleteRoom = async () => {
+    if (!active || busy) return;
+    setBusy(true);
+    const { data } = await supabase.rpc("delete_agent_room", { p_group: active });
+    setBusy(false);
+    if ((data as { ok?: boolean })?.ok) {
+      setConfirmDelete(false);
+      setActive(null);
+      await loadRooms();
+    }
+  };
+
   const participants = useMemo(() => [...new Set(msgs.map((m) => m.from).filter(Boolean))], [msgs]);
+  const shownMsgs = kind === "all" ? msgs : msgs.filter((m) => (m.kind || "chat") === kind);
   const activeRoom = rooms.find((r) => r.id === active);
   const stats = useMemo(() => {
     const now = Date.now();
@@ -281,14 +324,69 @@ export default function FleetPage() {
 
           {/* live timeline */}
           <section className="flex min-w-0 flex-1 flex-col">
-            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3 sm:px-6">
-              <div className="min-w-0">
-                <h2 className="mono truncate text-sm font-semibold text-text">{activeRoom?.name ?? "—"}</h2>
-                <p className="mt-0.5 truncate text-xs text-muted">
-                  {participants.length ? participants.join(" · ") : "No participants yet"}
-                </p>
+            <div className="shrink-0 border-b border-border px-4 py-3 sm:px-6">
+              <div className="flex items-center justify-between gap-2">
+                <h2 className="mono flex min-w-0 items-center gap-2 text-sm font-semibold text-text">
+                  <span className="truncate">{activeRoom?.name ?? "—"}</span>
+                  <span key={tick} className="live-dot shrink-0" title="Live" />
+                </h2>
+                {activeRoom &&
+                  (confirmDelete ? (
+                    <span className="flex shrink-0 items-center gap-2 text-xs">
+                      <span className="text-muted">Delete room?</span>
+                      <button onClick={deleteRoom} disabled={busy} className="text-[color:var(--danger)] hover:opacity-80">
+                        {busy ? "Deleting…" : "Delete"}
+                      </button>
+                      <button onClick={() => setConfirmDelete(false)} className="text-muted hover:text-text">Cancel</button>
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => setConfirmDelete(true)}
+                      className="btn-ghost shrink-0 px-2.5 py-1 text-[11px] !border-red-500/30 text-[color:var(--danger)] hover:!border-red-400"
+                    >
+                      Delete room
+                    </button>
+                  ))}
               </div>
-              <span key={tick} className="live-dot shrink-0" title="Live" />
+
+              {/* roster + presence + kick */}
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {members.length === 0 ? (
+                  <span className="text-[11px] text-[color:var(--faint)]">No members yet</span>
+                ) : (
+                  members.map((mem) => {
+                    const online = mem.last_read && Date.now() - Date.parse(mem.last_read) < ACTIVE_WINDOW;
+                    return (
+                      <span key={mem.id} className="inline-flex items-center gap-1 rounded-full border border-border px-2 py-0.5 text-[11px]">
+                        {online ? (
+                          <span className="live-dot" />
+                        ) : (
+                          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--faint)]" />
+                        )}
+                        <span className="mono text-muted">{mem.name}</span>
+                        <button onClick={() => kick(mem.id)} title={`Remove ${mem.name}`} className="ml-0.5 text-[color:var(--faint)] transition hover:text-[color:var(--danger)]">
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })
+                )}
+              </div>
+
+              {/* kind filter */}
+              <div className="mt-2 flex flex-wrap items-center gap-1">
+                {KINDS.map((k) => (
+                  <button
+                    key={k}
+                    onClick={() => setKind(k)}
+                    className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider transition ${
+                      kind === k ? "bg-[color:var(--bubble-out-bg)] text-[color:var(--bubble-out-fg)]" : "text-muted hover:text-text"
+                    }`}
+                  >
+                    {k}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div
@@ -314,8 +412,10 @@ export default function FleetPage() {
                 <p className="mono text-sm text-[color:var(--faint)]">
                   Nothing here yet. Connect an agent to this room and its activity will stream in live.
                 </p>
+              ) : shownMsgs.length === 0 ? (
+                <p className="mono text-sm text-[color:var(--faint)]">No {kind} messages.</p>
               ) : (
-                msgs.map((m, i) => (
+                shownMsgs.map((m, i) => (
                   <div key={i} className="flex flex-col gap-0.5">
                     <div className="flex items-baseline gap-2">
                       <span className="mono text-xs font-semibold text-text">{m.from}</span>
