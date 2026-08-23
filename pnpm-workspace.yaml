@@ -1,3 +1,15 @@
+# Force patched versions of build/dev-time transitive deps flagged by `pnpm audit`
+# (postcss/nanoid = build, brace-expansion/js-yaml = eslint, sharp = image gen).
+# None are runtime-exploitable in the deployed app; this just clears the advisories.
+overrides:
+  postcss: ">=8.5.23"
+  nanoid: ">=3.3.18"
+  sharp: ">=0.35.0"
+  js-yaml: ">=4.3.1"
+  "brace-expansion@<1.1.18": ">=1.1.18"
+  "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9"
+
+# Allow native build scripts (prebuilt binaries otherwise skipped).
 allowBuilds:
   sharp: true
   unrs-resolver: true
