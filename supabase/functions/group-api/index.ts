@@ -144,6 +144,16 @@ const windowSince = (period: string) => {
   return { since: new Date(Date.now() - ms).toISOString(), label: period === "day" ? "last 24 hours" : period === "month" ? "last 30 days" : "last 7 days" };
 };
 
+// ---- Rate limiting (DB-backed via rl_hit; fail-open if the RPC errors) ----
+const clientIp = (req: Request) =>
+  (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
+const RL = { create: [10, 3600], join: [20, 3600], post: [60, 60], wait: [40, 60], read: [240, 60] } as const;
+async function limited(admin: Admin, bucket: string, spec: readonly [number, number]): Promise<boolean> {
+  const { data } = await admin.rpc("rl_hit", { p_bucket: bucket, p_limit: spec[0], p_window_secs: spec[1] });
+  return data === false; // true => over the limit
+}
+const rlError = (what: string) => json({ ok: false, error: `Rate limit — too many ${what}. Wait a bit and retry.` }, 429);
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   try {
@@ -154,6 +164,7 @@ Deno.serve(async (req: Request) => {
     const body = await req.json().catch(() => ({}));
     const action = String(body.action ?? "");
     const bearer = (req.headers.get("Authorization") ?? "").replace(/^Bearer\s+/i, "").trim();
+    const ip = clientIp(req);
 
     if (action === "peek") {
       const code = inviteFrom(body.invite_code ?? body.link);
@@ -168,6 +179,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "create_group") {
+      if (await limited(admin, "create:" + ip, RL.create)) return rlError("groups created");
       const name = cleanName(body.name) || "Untitled group";
       let owner_user: string | null = null;
       if (bearer.startsWith("eyJ")) {
@@ -199,6 +211,7 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "join") {
+      if (await limited(admin, "join:" + ip, RL.join)) return rlError("join attempts");
       const code = inviteFrom(body.invite_code ?? body.link);
       const name = cleanName(body.name);
       if (!name) return json({ ok: false, error: "Pick a name to join with." });
@@ -322,6 +335,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, left: true, note: "You've left the group and this token is now void. Your past messages stay in the room under your name; you keep nothing. Re-join with the invite link any time for a fresh start." });
     }
     if (action === "say" || action === "share" || action === "log") {
+      if (await limited(admin, "post:" + meId, RL.post)) return rlError("messages");
       const isCtx = action === "share";
       const isLog = action === "log";
       const text = String((isCtx ? body.content : body.text) ?? body.content ?? body.text ?? "").trim();
@@ -339,6 +353,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, id: msg.id, created_at: msg.created_at, next_step });
     }
     if (action === "read") {
+      if (await limited(admin, "read:" + meId, RL.read)) return rlError("reads");
       // A caller that supplies its own `since` (e.g. the background Stop-hook
       // watcher) manages its OWN cursor — it must not move the shared last_read
       // that interactive ping_read / ping_wait depend on, or those go blind.
@@ -374,6 +389,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, group, period: w.label, message_count: r.count, mode: "server", digest: r.text });
     }
     if (action === "wait") {
+      if (await limited(admin, "wait:" + meId, RL.wait)) return rlError("waits");
       const since = String(me.last_read);
       const startedAt = Date.now();
       const maxMs = 8000;
