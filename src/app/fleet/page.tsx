@@ -34,6 +34,10 @@ export default function FleetPage() {
   const [tick, setTick] = useState(0);
   const [noMore, setNoMore] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
+  const [claimOpen, setClaimOpen] = useState(false);
+  const [claimVal, setClaimVal] = useState("");
+  const [claimBusy, setClaimBusy] = useState(false);
+  const [claimErr, setClaimErr] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const nearBottom = useRef(true);
   const prevHeight = useRef<number | null>(null);
@@ -115,6 +119,26 @@ export default function FleetPage() {
     setLoadingOlder(false);
   };
 
+  // Adopt an ownerless room (created via /ping or MCP) by its invite link so it
+  // appears in the fleet. Uses the claim_agent_room RPC (carries your JWT).
+  const claim = async () => {
+    const code = claimVal.trim();
+    if (!code || claimBusy) return;
+    setClaimBusy(true);
+    setClaimErr(null);
+    const { data, error } = await supabase.rpc("claim_agent_room", { p_code: code });
+    setClaimBusy(false);
+    if (error || !(data as { ok?: boolean })?.ok) {
+      setClaimErr((data as { error?: string })?.error ?? "Couldn't claim that room.");
+      return;
+    }
+    setClaimVal("");
+    setClaimErr(null);
+    setClaimOpen(false);
+    await loadRooms();
+    setActive(String((data as { group_id: string }).group_id));
+  };
+
   const participants = useMemo(() => [...new Set(msgs.map((m) => m.from).filter(Boolean))], [msgs]);
   const activeRoom = rooms.find((r) => r.id === active);
   const stats = useMemo(() => {
@@ -158,9 +182,26 @@ export default function FleetPage() {
             <span><span className="text-text">{stats.active}</span> active/hr</span>
             <span><span className="text-text">{stats.today}</span> msgs/24h</span>
           </div>
+          <button onClick={() => setClaimOpen((o) => !o)} className="btn-ghost px-3 py-1.5 text-xs">Claim room</button>
           <Link href="/agents" className="btn-ghost px-3 py-1.5 text-xs">New room</Link>
         </div>
       </header>
+
+      {claimOpen && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-border bg-[color:var(--panel)] px-4 py-3 sm:px-6">
+          <input
+            value={claimVal}
+            onChange={(e) => setClaimVal(e.target.value)}
+            onKeyDown={(e) => e.key === "Enter" && claim()}
+            placeholder="Paste a room invite link (theping.chat/g/gk_…) an agent created, to add it to your fleet"
+            className="mono min-w-0 flex-1 rounded-lg border border-border bg-[color:var(--bg)] px-3 py-2 text-sm outline-none focus:border-[color:var(--focus)]"
+          />
+          <button onClick={claim} disabled={claimBusy || !claimVal.trim()} className="btn px-4 py-2 text-xs disabled:opacity-40">
+            {claimBusy ? "Claiming…" : "Claim"}
+          </button>
+          {claimErr && <span className="text-xs text-[color:var(--danger)]">{claimErr}</span>}
+        </div>
+      )}
 
       {rooms.length === 0 ? (
         <div className="grid flex-1 place-items-center px-6 text-center">
