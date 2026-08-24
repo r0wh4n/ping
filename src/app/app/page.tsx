@@ -30,6 +30,7 @@ function AuthScreen({ signUp, logIn }: { signUp: AuthFn; logIn: AuthFn }) {
   const [mode, setMode] = useState<"signup" | "login">("login");
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPass, setShowPass] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -93,7 +94,7 @@ function AuthScreen({ signUp, logIn }: { signUp: AuthFn; logIn: AuthFn }) {
           <div className="mt-3 flex items-center rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-3 focus-within:border-[color:var(--focus)]">
             <span className="text-muted">🔒</span>
             <input
-              type="password"
+              type={showPass ? "text" : "password"}
               value={password}
               onChange={(e) => {
                 setPassword(e.target.value);
@@ -103,6 +104,26 @@ function AuthScreen({ signUp, logIn }: { signUp: AuthFn; logIn: AuthFn }) {
               placeholder={isSignup ? "choose a password (8+ chars)" : "your password"}
               className="w-full bg-transparent px-2 py-3 outline-none placeholder:text-[color:var(--faint)]"
             />
+            <button
+              type="button"
+              onClick={() => setShowPass((s) => !s)}
+              aria-label={showPass ? "Hide password" : "Show password"}
+              title={showPass ? "Hide password" : "Show password"}
+              className="shrink-0 px-1 text-muted transition hover:text-text"
+            >
+              {showPass ? (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+                  <path d="M9.9 4.24A9.1 9.1 0 0 1 12 4c6.5 0 10 7 10 7a13.6 13.6 0 0 1-2.2 2.94M6.6 6.6C3.9 8.23 2 11 2 11s3.5 7 10 7a9.3 9.3 0 0 0 5.38-1.6" />
+                  <path d="M14.12 14.12A3 3 0 1 1 9.88 9.88" />
+                  <path d="M2 2 22 22" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5" aria-hidden="true">
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+                  <circle cx="12" cy="12" r="3" />
+                </svg>
+              )}
+            </button>
           </div>
 
           {error && <p className="mt-3 text-sm text-[color:var(--danger)]">{error}</p>}
