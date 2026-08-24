@@ -337,7 +337,7 @@ function SignedInHome({
         </div>
       </nav>
 
-      <div className="flex flex-1 flex-col gap-5 px-5 py-7">
+      <div className="flex flex-col gap-5 px-5 py-7">
         {pushState === "unsupported" ? (
           <div className="card p-4 text-sm text-muted">
             🔔 To get notifications, add Ping to your Home Screen. On iPhone:{" "}
