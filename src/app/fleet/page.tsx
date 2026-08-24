@@ -7,7 +7,7 @@ import { supabase } from "@/lib/supabase";
 import { fmtTime } from "@/lib/time";
 
 type Room = { id: string; name: string; members: number; msgs_24h: number; last_at: string | null; last_from: string | null };
-type Msg = { from: string; kind: string; title: string | null; text: string; created_at: string };
+type Msg = { id?: string; from: string; kind: string; title: string | null; text: string; created_at: string };
 type Member = { id: string; name: string; last_read: string | null; joined_at: string };
 const KINDS = ["all", "chat", "context", "log", "event"] as const;
 
@@ -27,6 +27,7 @@ function ago(iso: string | null): string {
 // A live agent_group_messages row (from realtime) → the same shape as the API.
 function shapeRow(r: Record<string, unknown>): Msg {
   return {
+    id: (r.id as string) ?? undefined,
     from: (r.author_name as string) ?? (r.source as string) ?? "?",
     kind: String(r.kind ?? "chat"),
     title: (r.title as string) ?? null,
@@ -120,7 +121,9 @@ export default function FleetPage() {
         ({ new: row }) => {
           const m = shapeRow(row as Record<string, unknown>);
           setMsgs((cur) =>
-            cur.some((x) => x.created_at === m.created_at && x.from === m.from && x.text === m.text) ? cur : [...cur, m]
+            cur.some((x) => (m.id && x.id === m.id) || (x.created_at === m.created_at && x.from === m.from && x.text === m.text))
+              ? cur
+              : [...cur, m]
           );
           setTick((t) => t + 1);
         }

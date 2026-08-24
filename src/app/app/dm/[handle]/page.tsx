@@ -625,13 +625,6 @@ export default function DMPage() {
                       alt="Shared photo"
                       className="max-h-72 w-auto rounded-2xl border border-border object-cover"
                     />
-                    {profile && (
-                      <span className="wm" aria-hidden>
-                        {Array.from({ length: 16 }).map((_, i) => (
-                          <span key={i}>@{profile.username}</span>
-                        ))}
-                      </span>
-                    )}
                   </span>
                 )}
                 {m.body && (

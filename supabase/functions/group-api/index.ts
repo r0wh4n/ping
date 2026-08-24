@@ -76,6 +76,7 @@ async function shape(admin: Admin, rows: any[], meId: string) {
     (ms ?? []).forEach((m) => (names[String(m.id)] = String(m.name)));
   }
   return rows.map((m) => ({
+    id: m.id,
     from: m.author_name ?? (m.member_id ? (names[String(m.member_id)] ?? "?") : (m.source ?? "webhook")),
     mine: m.member_id === meId,
     kind: m.kind, title: m.title, text: m.body, created_at: m.created_at,
@@ -147,7 +148,7 @@ const windowSince = (period: string) => {
 // ---- Rate limiting (DB-backed via rl_hit; fail-open if the RPC errors) ----
 const clientIp = (req: Request) =>
   (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
-const RL = { create: [10, 3600], join: [20, 3600], post: [60, 60], wait: [40, 60], read: [240, 60] } as const;
+const RL = { create: [10, 3600], join: [20, 3600], post: [60, 60], wait: [40, 60], read: [240, 60], synth: [20, 60] } as const;
 async function limited(admin: Admin, bucket: string, spec: readonly [number, number]): Promise<boolean> {
   const { data } = await admin.rpc("rl_hit", { p_bucket: bucket, p_limit: spec[0], p_window_secs: spec[1] });
   return data === false; // true => over the limit
@@ -324,8 +325,8 @@ Deno.serve(async (req: Request) => {
     }
     if (action === "members") {
       const { data: ms } = await admin
-        .from("agent_group_members").select("name,joined_at").eq("group_id", gid).order("joined_at", { ascending: true });
-      return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => ({ name: m.name, you: m.name === me.name })) });
+        .from("agent_group_members").select("id,name,joined_at").eq("group_id", gid).order("joined_at", { ascending: true });
+      return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => ({ name: m.name, you: String(m.id) === meId })) });
     }
     // Invite control. Any member can shut the door or reopen it — these rooms are
     // peer groups with no admin role, and inventing one here would be a bigger
@@ -396,7 +397,12 @@ Deno.serve(async (req: Request) => {
       // watcher) manages its OWN cursor — it must not move the shared last_read
       // that interactive ping_read / ping_wait depend on, or those go blind.
       const clientCursor = body.since !== undefined && body.since !== null && String(body.since) !== "";
-      const since = clientCursor ? new Date(String(body.since)).toISOString() : String(me.last_read);
+      let since = String(me.last_read);
+      if (clientCursor) {
+        const t = Date.parse(String(body.since));
+        if (Number.isNaN(t)) return json({ ok: false, error: "`since` must be an ISO timestamp (e.g. 2026-08-25T10:00:00Z)." });
+        since = new Date(t).toISOString();
+      }
       let q = admin
         .from("agent_group_messages").select("id, member_id, author_name, kind, title, body, created_at, source")
         .eq("group_id", gid).order("created_at", { ascending: true }).limit(200);
@@ -413,7 +419,12 @@ Deno.serve(async (req: Request) => {
       // Page BACKWARD through the timeline (older than `before`). Read-only —
       // never advances last_read. Returns oldest→newest with a next_before cursor.
       if (await limited(admin, "read:" + meId, RL.read)) return rlError("reads");
-      const before = body.before ? new Date(String(body.before)).toISOString() : null;
+      let before: string | null = null;
+      if (body.before) {
+        const t = Date.parse(String(body.before));
+        if (Number.isNaN(t)) return json({ ok: false, error: "`before` must be an ISO timestamp (e.g. 2026-08-25T10:00:00Z)." });
+        before = new Date(t).toISOString();
+      }
       const limit = Math.min(Math.max(Number(body.limit) || 50, 1), 200);
       let hq = admin
         .from("agent_group_messages").select("id, member_id, author_name, kind, title, body, created_at, source")
@@ -425,6 +436,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, group: await groupName(admin, gid), count: asc.length, has_more: desc.length === limit, next_before: desc.length ? desc[desc.length - 1].created_at : null, messages: await shape(admin, asc, meId) });
     }
     if (action === "catchup") {
+      if (await limited(admin, "synth:" + meId, RL.synth)) return rlError("summaries");
       const group = (await groupName(admin, gid)) ?? "this group";
       const r = await synthOverGroup(admin, gid, group, CATCHUP_SYSTEM, null);
       if (r.count === 0) return json({ ok: true, group, message_count: 0, brief: "This room is empty — no messages or shared context yet. Say hi with ping_say, or post what you're working on with ping_share." });
@@ -433,6 +445,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, group, message_count: r.count, mode: "server", brief: r.text });
     }
     if (action === "digest") {
+      if (await limited(admin, "synth:" + meId, RL.synth)) return rlError("summaries");
       const group = (await groupName(admin, gid)) ?? "this group";
       const w = windowSince(String(body.period ?? "week").toLowerCase());
       const r = await synthOverGroup(admin, gid, group, digestSystem(w.label), w.since);
@@ -443,18 +456,35 @@ Deno.serve(async (req: Request) => {
     }
     if (action === "wait") {
       if (await limited(admin, "wait:" + meId, RL.wait)) return rlError("waits");
-      const since = String(me.last_read);
+      let cursor = String(me.last_read);
+      // A brand-new member (cursor still at the epoch default) hasn't caught up —
+      // don't replay the whole backlog as "the reply." Jump to the latest message
+      // and block for genuinely NEW ones (they can ping_read/ping_catchup for backlog).
+      const parsed = Date.parse(cursor);
+      if (Number.isNaN(parsed) || parsed < Date.parse("2020-01-01T00:00:00Z")) {
+        const { data: latest } = await admin.from("agent_group_messages")
+          .select("created_at").eq("group_id", gid).order("created_at", { ascending: false }).limit(1);
+        cursor = latest?.[0]?.created_at ?? new Date().toISOString();
+        await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
+      }
       const startedAt = Date.now();
       const maxMs = 8000;
       while (true) {
         const { data: rows } = await admin
           .from("agent_group_messages").select("id, member_id, author_name, kind, title, body, created_at, source")
-          .eq("group_id", gid).gt("created_at", since).order("created_at", { ascending: true }).limit(50);
+          .eq("group_id", gid).gt("created_at", cursor).order("created_at", { ascending: true }).limit(50);
         const all = rows ?? [];
-        const fresh = all.filter((m) => m.member_id !== meId);
-        if (fresh.length) {
-          await admin.from("agent_group_members").update({ last_read: all[all.length - 1].created_at }).eq("id", meId);
-          return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId) });
+        if (all.length) {
+          const fresh = all.filter((m) => m.member_id !== meId);
+          if (fresh.length) {
+            await admin.from("agent_group_members").update({ last_read: all[all.length - 1].created_at }).eq("id", meId);
+            return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId) });
+          }
+          // Batch was all our OWN messages — advance past them so we never re-scan
+          // or deadlock behind our own monologue, then look further immediately.
+          cursor = all[all.length - 1].created_at;
+          await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
+          continue;
         }
         if (Date.now() - startedAt >= maxMs)
           return json({ ok: true, count: 0, timed_out: true, note: "No reply yet — call ping_wait again to keep waiting." });

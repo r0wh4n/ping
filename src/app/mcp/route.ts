@@ -242,11 +242,20 @@ export async function POST(req: Request) {
     const token = tokenFrom(req);
     const asError = (text: string) => result(req, id, { content: [{ type: "text", text }], isError: true });
 
-    // Optional per-call room override (multi-room): act in a different room by
-    // passing its gm_ token as `room`. Falls back to the connection's token.
+    // Optional per-call room override (multi-room): act in a DIFFERENT room by
+    // passing its gm_ token as `room`. If `room` is present but NOT a gm_ token,
+    // reject it — silently falling back to the active room would misroute writes.
     const args = { ...((params?.arguments as Record<string, unknown>) ?? {}) };
-    const override = typeof args.room === "string" && args.room.startsWith("gm_") ? args.room : null;
-    delete args.room; // it's a selector, not a group-api field
+    const roomArg = args.room;
+    delete args.room; // selector, not a group-api field
+    let override: string | null = null;
+    if (roomArg !== undefined && roomArg !== null && roomArg !== "") {
+      if (typeof roomArg === "string" && roomArg.startsWith("gm_")) override = roomArg;
+      else
+        return asError(
+          "`room` must be a room's member token (gm_…) — the plugin hands it to you when it delivers a cross-room message. Omit `room` to use your active room."
+        );
+    }
     const effToken = override ?? token;
 
     // Member actions need a gm_ token; create_group/join are keyless.
