@@ -334,25 +334,6 @@ html, body, .card, .btn, .btn-ghost {
 }
 .md-link { text-decoration: underline; text-underline-offset: 2px; }
 
-/* ---- media watermark: viewer's handle tiled over images (screenshot deterrent) ---- */
-.wm {
-  position: absolute;
-  inset: -35%;
-  display: flex;
-  flex-wrap: wrap;
-  align-content: center;
-  justify-content: center;
-  gap: 12px 24px;
-  transform: rotate(-24deg);
-  pointer-events: none;
-  user-select: none;
-  font-family: var(--font-mono), monospace;
-  font-size: 12px;
-  letter-spacing: 0.04em;
-  color: rgba(255, 255, 255, 0.5);
-  mix-blend-mode: overlay;
-}
-
 /* ---- motion ---- */
 .rise { animation: rise 0.7s cubic-bezier(0.2, 0.6, 0.2, 1) both; }
 @keyframes rise {

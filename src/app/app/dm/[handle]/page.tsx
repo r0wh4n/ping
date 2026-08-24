@@ -932,11 +932,6 @@ export default function DMPage() {
               // eslint-disable-next-line @next/next/no-img-element
               <img src={snapView.url} alt="Snap" className="max-h-[100dvh] max-w-full object-contain" />
             )}
-            <span className="wm" aria-hidden>
-              {Array.from({ length: 24 }).map((_, i) => (
-                <span key={i}>@{profile.username}</span>
-              ))}
-            </span>
           </div>
           <button
             onClick={(e) => {
