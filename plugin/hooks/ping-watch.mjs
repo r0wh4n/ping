@@ -11,31 +11,33 @@
 // room keeps its OWN cursor; we send it as `since` so the server never advances
 // the shared last_read that interactive ping_read/ping_wait depend on.
 
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
+import { readState, updateState, roomsOf } from "./ping-state.mjs";
 
 const execFileP = promisify(execFile);
 
-const DIR = join(homedir(), ".ping");
-const STATE = join(DIR, "state.json");
 const API = "https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1/group-api";
 const ANON =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzZHNsa3hkb3F3c3BqZm96d3ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5ODg3NjQsImV4cCI6MjEwMDU2NDc2NH0.Kuop6VvV3Ykak8SqH8yBJbt0H6N-mB2-riSVFQS7aDo";
 const FLOOR = "0000-01-01T00:00:00+00:00"; // sorts before any real timestamp
 
 const allowStop = () => process.exit(0); // no stdout + exit 0 => agent stops normally
-const writeState = (s) => {
-  try { mkdirSync(DIR, { recursive: true }); writeFileSync(STATE, JSON.stringify(s)); } catch {}
-};
 
-// Normalize any stored shape into a rooms array.
-function roomsOf(state) {
-  if (Array.isArray(state.rooms)) return state.rooms.filter((r) => r && r.token);
-  if (state.token) return [{ token: state.token, group: state.group, last_seen: state.last_seen }];
-  return [];
+// Does this message @mention me? A plain substring match was wrong twice over:
+// "@rohan" fired on "@rohandeep" and on "rohan@example.com", while anyone whose
+// display name had a space ("Rohan Pandey") could never be mentioned at all,
+// since people type "@Rohan". So: match the full name OR its first word, require
+// the @ to start a token, and stop at a name-character boundary.
+export function mentionsMe(text, name) {
+  if (!name) return false;
+  const t = String(text || "");
+  const candidates = [String(name), String(name).trim().split(/\s+/)[0]].filter(Boolean);
+  return candidates.some((c) => {
+    const esc = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`(^|[^A-Za-z0-9_@-])@${esc}(?![A-Za-z0-9_-])`, "i").test(t);
+  });
 }
 
 function readStdin() {
@@ -73,9 +75,8 @@ async function main() {
   try { input = JSON.parse((await readStdin()) || "{}"); } catch {}
   if (input.stop_hook_active) return allowStop(); // loop cap reached -> stop
 
-  let state;
-  try { state = JSON.parse(readFileSync(STATE, "utf8")); } catch { return allowStop(); }
-  if (state.watch !== true) return allowStop(); // paused
+  const state = readState();
+  if (state.watch !== true) return allowStop(); // paused (or no state file yet)
 
   const rooms = roomsOf(state);
   if (!rooms.length) return allowStop();
@@ -108,7 +109,7 @@ async function main() {
       const isActive = room.group && state.active && room.group === state.active;
       const hint = isActive ? "" : ` (reply here: ping_say with room:"${room.token}")`;
       // @mention: flag if any fresh message names me (my display name in this room).
-      const mentioned = !!room.name && fresh.some((m) => String(m.text || "").toLowerCase().includes("@" + String(room.name).toLowerCase()));
+      const mentioned = fresh.some((m) => mentionsMe(m.text, room.name));
       const flag = mentioned ? "🔔 " : "";
       const tag = mentioned ? " — you were @mentioned" : "";
       const lines = fresh.map((m) => `    [${m.from}] ${m.text}`).join("\n");
@@ -116,7 +117,16 @@ async function main() {
     }
   }
 
-  if (changed) writeState({ ...state, watch: true, rooms: next });
+  // Merge only the cursors we advanced back into whatever state is on disk NOW.
+  // Writing our whole snapshot would erase a room another session joined while
+  // we were polling, and would resurrect watch:true after a concurrent /ping off.
+  if (changed) {
+    const cursors = new Map(next.filter((r) => r.last_seen).map((r) => [r.token, r.last_seen]));
+    updateState((cur) => ({
+      ...cur,
+      rooms: roomsOf(cur).map((r) => (cursors.has(r.token) ? { ...r, last_seen: cursors.get(r.token) } : r)),
+    }));
+  }
   if (!anyFresh) return allowStop();
 
   const activeHint = state.active ? ` (your active room is "${state.active}")` : "";
@@ -130,4 +140,6 @@ async function main() {
   process.exit(0);
 }
 
-main();
+// Only run as a hook, not when something imports mentionsMe (e.g. selfcheck) —
+// otherwise the import would poll rooms and process.exit() out from under it.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
