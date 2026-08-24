@@ -547,7 +547,14 @@ export default function DMPage() {
           </div>
         )}
 
-        {messages.map((m) => (
+        {messages.map((m) =>
+          m.system ? (
+            <div key={m.id} className="my-1 flex justify-center">
+              <span className="mono rounded-full bg-[color:var(--panel)] px-3 py-1 text-[11px] text-muted">
+                ⏲ {m.body}
+              </span>
+            </div>
+          ) : (
           <div key={m.id} className={`flex flex-col ${m.mine ? "items-end" : "items-start"}`}>
             {/* reply preview */}
             {m.reply && (

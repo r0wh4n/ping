@@ -21,6 +21,7 @@ export type DMsg = {
   audioSecs?: number;
   reply?: ReplyPreview | null;
   reactions: Reaction[];
+  system?: boolean; // client-only in-thread notice (e.g. disappearing turned on)
   expireAt?: string | null; // disappearing timer: set when SEEN; null = never
   // Snapchat-style view-once media ("snaps"). The media is only signed on
   // demand (openSnap) so an unopened/consumed snap can't be re-fetched.
@@ -79,6 +80,14 @@ const replyFromParent = (parent: DMsg | undefined): ReplyPreview | null =>
  * bucket, served via signed URLs), tapback reactions, replies, a shared
  * disappearing timer, and a manual "clear chat".
  */
+// Human label for a disappearing-timer duration (matches the picker options).
+const timerLabel = (s: number) =>
+  s <= 0 ? "off"
+    : s < 3600 ? `${Math.round(s / 60)} min`
+      : s < 86400 ? `${Math.round(s / 3600)} hour${s >= 7200 ? "s" : ""}`
+        : s < 604800 ? `${Math.round(s / 86400)} day${s >= 172800 ? "s" : ""}`
+          : `${Math.round(s / 604800)} week${s >= 1209600 ? "s" : ""}`;
+
 export function useDM(profile: Profile | null, friendUsername: string) {
   const me = profile?.id ?? null;
   const [status, setStatus] = useState<Status>("loading");
@@ -171,6 +180,14 @@ export function useDM(profile: Profile | null, friendUsername: string) {
   const applyTimer = useCallback((secs: number) => {
     clearAfterRef.current = secs;
     setClearAfter(secs);
+  }, []);
+
+  // Append a client-only system notice to the thread (not persisted).
+  const pushNotice = useCallback((text: string) => {
+    setMessages((m) => [
+      ...m,
+      { id: `notice-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, mine: false, system: true, body: text, created_at: new Date().toISOString(), reactions: [] },
+    ]);
   }, []);
 
   // Delete messages whose disappear-timer has elapsed (DB + local view). Only
@@ -481,8 +498,10 @@ export function useDM(profile: Profile | null, friendUsername: string) {
           setMessages((m) => m.filter((x) => x.id !== id));
         })
         .on("broadcast", { event: "timer" }, ({ payload }) => {
-          applyTimer(Number(payload?.seconds ?? 0));
+          const secs = Number(payload?.seconds ?? 0);
+          applyTimer(secs);
           prune();
+          pushNotice(`@${friendUsername} turned disappearing messages ${secs > 0 ? `on · ${timerLabel(secs)}` : "off"}`);
         })
         .on("broadcast", { event: "pin" }, ({ payload }) => {
           setPinnedId(payload?.id ? String(payload.id) : null);
@@ -507,7 +526,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
         channel.current = null;
       }
     };
-  }, [me, friendUsername, applyTimer, prune, pairFilter, signPath, markRead, decodeBody, addRow, catchUp, buildMedia]);
+  }, [me, friendUsername, applyTimer, prune, pushNotice, pairFilter, signPath, markRead, decodeBody, addRow, catchUp, buildMedia]);
 
   // Periodically enforce the timer while the thread is open.
   useEffect(() => {
@@ -846,10 +865,11 @@ export function useDM(profile: Profile | null, friendUsername: string) {
         clear_after_seconds: seconds,
         updated_at: new Date().toISOString(),
       });
-      channel.current?.send({ type: "broadcast", event: "timer", payload: { seconds } });
+      channel.current?.send({ type: "broadcast", event: "timer", payload: { seconds, by: profile?.username } });
       prune();
+      pushNotice(`You turned disappearing messages ${seconds > 0 ? `on · ${timerLabel(seconds)}` : "off"}`);
     },
-    [me, applyTimer, prune]
+    [me, applyTimer, prune, pushNotice, profile]
   );
 
   // Either party can pin/unpin one message for the thread. Stores only the id.
