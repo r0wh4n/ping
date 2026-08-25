@@ -20,6 +20,10 @@ Input: `$ARGUMENTS`
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" new '<the rest of the input>'
   ```
+- Input is exactly `claim` → print the claim links for this machine's rooms:
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" claim
+  ```
 - Input is exactly `off` → pause auto-delivery (rooms are kept):
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" off
@@ -35,7 +39,12 @@ The script prints JSON. Report it in a few lines:
 - `✓ Ping connected as **<connected_as>**. Active room: **<active_room>** — that's where `ping_say` posts. Auto-delivery is on for all **<rooms_watched>** of your rooms, so new messages reach you without being asked.`
 - If `invite_url` is present, show it as the link to share with teammates.
 - If `webhook_url` is present, mention it pipes GitHub/CI/Linear events into the room.
+- If `claim_url` is present, show it as: open this while signed in to theping.chat to
+  manage the room from the web. It proves you created the room, so give it to nobody
+  — the invite link is the one you share.
 - If `mcp_registered` is false, tell them to run `/ping` again.
+
+For `claim`, list each room with its claim link and the same warning.
 - Finish with: run **/mcp** (reconnect) or restart Claude Code so the tools load — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
 
 Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping off`

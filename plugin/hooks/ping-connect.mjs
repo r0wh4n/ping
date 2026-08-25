@@ -27,6 +27,8 @@ const ANON =
 
 const die = (msg) => { console.log(msg); process.exit(1); };
 
+const claimUrl = (token) => `https://theping.chat/fleet?claim=${encodeURIComponent(token)}`;
+
 // Invite codes are ours and always [A-Za-z0-9_-]. Anything else is either a typo
 // or an injection attempt; reject rather than sanitize so failures are obvious.
 const CODE_RE = /^gk_[A-Za-z0-9_-]{4,80}$/;
@@ -108,7 +110,6 @@ async function connect(mode, rest) {
 
   const wired = await wireMcp(res.token);
 
-  // Only non-secret fields are printed; the gm_ token never leaves this process.
   console.log(JSON.stringify({
     ok: true,
     connected_as: name,
@@ -117,6 +118,10 @@ async function connect(mode, rest) {
     rooms_watched: roomsOf(readState()).length,
     invite_url: res.invite_url ?? null,
     webhook_url: res.webhook_url ?? null,
+    // Only the creator gets a claim link, and only for a room they just made.
+    // It carries the host token, so it proves ownership the way the shareable
+    // invite link cannot -- show it to your own user, never to the room.
+    claim_url: mode === "new" ? claimUrl(res.token) : null,
   }, null, 2));
   if (!wired) console.log("\nNote: `claude mcp add` didn't succeed — run /ping again, or add the server manually.");
 }
@@ -130,8 +135,20 @@ async function main() {
     console.log(JSON.stringify({ ok: true, watch: false, rooms_kept: roomsOf(readState()).length }));
     return;
   }
+  // Reprint the claim links for rooms this machine already joined, so a room
+  // created before claim links existed can still be adopted in the web app.
+  if (mode === "claim") {
+    const rooms = roomsOf(readState());
+    if (!rooms.length) die("No Ping rooms on this machine yet. Run /ping new <name> or /ping <invite-link> first.");
+    console.log(JSON.stringify({
+      ok: true,
+      note: "Open a claim link while signed in to theping.chat to adopt that room. Only works for rooms this agent created.",
+      rooms: rooms.map((r) => ({ room: r.group ?? "room", claim_url: claimUrl(r.token) })),
+    }, null, 2));
+    return;
+  }
   if (mode === "join" || mode === "new") return connect(mode, arg);
-  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping off');
+  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping claim   ·   /ping off');
 }
 
 main().catch((e) => die("Ping: " + String(e?.message || e)));

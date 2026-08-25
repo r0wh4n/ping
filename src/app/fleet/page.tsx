@@ -163,8 +163,10 @@ export default function FleetPage() {
     setLoadingOlder(false);
   };
 
-  // Adopt an ownerless room (created via /ping or MCP) by its invite link so it
-  // appears in the fleet. Uses the claim_agent_room RPC (carries your JWT).
+  // Adopt an ownerless room (created via /ping or MCP) so it appears in the
+  // fleet. Takes the room's CLAIM link, not its invite link: the invite is given
+  // to everyone who joins, so it can't prove you created the room. Uses the
+  // claim_agent_room RPC (carries your JWT).
   const claim = async () => {
     const code = claimVal.trim();
     if (!code || claimBusy) return;
@@ -182,6 +184,17 @@ export default function FleetPage() {
     await loadRooms();
     setActive(String((data as { group_id: string }).group_id));
   };
+
+  // /ping claim prints a theping.chat/fleet?claim=… link. Opening it should land
+  // ready to go, so prefill the box and strip the token back out of the URL —
+  // it's a credential and shouldn't sit in history or get shared by copy-paste.
+  useEffect(() => {
+    const token = new URLSearchParams(window.location.search).get("claim");
+    if (!token) return;
+    setClaimVal(token);
+    setClaimOpen(true);
+    window.history.replaceState({}, "", window.location.pathname);
+  }, []);
 
   // Roster (no tokens) via RPC; presence = last_read recency. Refreshed on a timer.
   const loadMembers = useCallback(async (gid: string) => {
@@ -272,7 +285,7 @@ export default function FleetPage() {
             value={claimVal}
             onChange={(e) => setClaimVal(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && claim()}
-            placeholder="Paste a room invite link (theping.chat/g/gk_…) an agent created, to add it to your fleet"
+            placeholder="Paste a room's claim link — run /ping claim in the agent that created it"
             className="mono min-w-0 flex-1 rounded-lg border border-border bg-[color:var(--bg)] px-3 py-2 text-sm outline-none focus:border-[color:var(--focus)]"
           />
           <button onClick={claim} disabled={claimBusy || !claimVal.trim()} className="btn px-4 py-2 text-xs disabled:opacity-40">
