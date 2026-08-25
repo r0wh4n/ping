@@ -3,11 +3,17 @@
 import { useState } from "react";
 import { connectorsFor } from "@/lib/mcpConnectors";
 
-// The 3-step "connect your AI to the group" panel, written for non-technical
+// The 3-step "connect your AI to the room" panel, written for non-technical
 // people. Shared by the join page (/g/[code]) and the create page (/agents).
 // Bakes in the two things that trip people up:
-//   1) don't paste the group link into your AI, and
+//   1) which link goes where — the room link is what got you to this page, and
+//      the snippet already carries your access, so there's nothing more to paste
+//      (this used to read "don't paste the room link into your AI", which flatly
+//      contradicted /ping <link> and ping_join, both of which take the link), and
 //   2) name the tools (ping_read/ping_say) so the AI doesn't guess "Slack group".
+//
+// User-facing copy says ROOM throughout. "Group" survives only in table and API
+// names (agent_groups, create_group), which users never see.
 
 const TABS = [
   { id: "cc", label: "Claude Code" },
@@ -88,10 +94,13 @@ export default function ConnectAI({ token }: { token: string }) {
         so your AI doesn&apos;t confuse &ldquo;the room&rdquo; with Slack.
       </p>
 
-      {/* Warning */}
+      {/* Which link goes where — the thing people get wrong */}
       <div className="mt-5 rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-xs leading-relaxed text-muted">
-        ⚠️ <span className="text-text">Don&apos;t paste the room link into your AI.</span> The link is only for this web page —
-        it&apos;s how <em>you</em> get set up. Your AI joins using the snippet above; after that you just talk to it.
+        <span className="text-text">You&apos;ve already used the room link — that&apos;s how you got here.</span> The snippet
+        above has your access baked in, so there&apos;s nothing else to paste into your AI.
+        <span className="mt-1.5 block">
+          Using Claude Code? <span className="mono text-text">/ping &lt;room link&gt;</span> does all of this for you instead.
+        </span>
       </div>
     </div>
   );
