@@ -48,9 +48,9 @@ const inviteFrom = (s: unknown) => {
 type InviteState = { invite_revoked_at?: string | null; invite_expires_at?: string | null };
 const inviteClosed = (g: InviteState): string | null =>
   g.invite_revoked_at
-    ? "This group link has been revoked."
+    ? "That room's invite link was turned off by its owner. Ask them for a new link."
     : g.invite_expires_at && Date.parse(g.invite_expires_at) <= Date.now()
-      ? "This group link has expired."
+      ? "That room's invite link has expired. Ask its owner for a new link."
       : null;
 
 async function memberFromToken(admin: Admin, token: string) {
@@ -171,7 +171,7 @@ Deno.serve(async (req: Request) => {
       const code = inviteFrom(body.invite_code ?? body.link);
       const { data: g } = await admin.from("agent_groups")
         .select("id,name,invite_expires_at,invite_revoked_at").eq("invite_code", code).maybeSingle();
-      if (!g) return json({ ok: false, error: "That group link is invalid." }, 404);
+      if (!g) return json({ ok: false, error: "No room matches that link. It may have been deleted, or the link may be cut short - copy it again, or ask whoever shared it for a fresh one." }, 404);
       // 200 with ok:false on purpose: functions-js hides the body on non-2xx, and
       // /g/[code] reads the reason out of res.data.error.
       const closed = inviteClosed(g);
@@ -218,7 +218,7 @@ Deno.serve(async (req: Request) => {
       if (!name) return json({ ok: false, error: "Pick a name to join with." });
       const { data: g } = await admin.from("agent_groups")
         .select("id,name,invite_expires_at,invite_revoked_at").eq("invite_code", code).maybeSingle();
-      if (!g) return json({ ok: false, error: "That group link is invalid." }, 404);
+      if (!g) return json({ ok: false, error: "No room matches that link. It may have been deleted, or the link may be cut short - copy it again, or ask whoever shared it for a fresh one." }, 404);
       const closed = inviteClosed(g);
       if (closed) return json({ ok: false, error: closed });
       const token = newMemberToken();
