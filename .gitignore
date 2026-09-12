@@ -32,3 +32,11 @@ yarn-debug.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Keep the TURN/env template in the repo even though .env* is ignored.
+!.env.example
+
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/

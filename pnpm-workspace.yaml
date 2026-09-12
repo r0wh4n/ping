@@ -6,8 +6,11 @@ overrides:
   nanoid: ">=3.3.18"
   sharp: ">=0.35.0"
   js-yaml: ">=4.3.1"
-  "brace-expansion@<1.1.18": ">=1.1.18"
-  "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9"
+  # Replacement ranges MUST be bounded: an open ">=1.1.18" resolves to the
+  # highest version on the registry (5.x), whose export is not callable, which
+  # breaks minimatch@3's `require('brace-expansion')(...)` and kills eslint.
+  "brace-expansion@<1.1.18": ">=1.1.18 <2"
+  "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9 <6"
 
 # Allow native build scripts (prebuilt binaries otherwise skipped).
 allowBuilds:

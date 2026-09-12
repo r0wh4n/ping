@@ -6,7 +6,10 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "check": "node --experimental-strip-types scripts/check-group-crypto.mjs && node --experimental-strip-types scripts/check-call-signalling.mjs",
+    "test": "npm run check && npx playwright test call.spec",
+    "test:e2e": "npx playwright test call.e2e"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",
@@ -22,6 +25,7 @@
     "tweetnacl-util": "^0.15.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
     "@types/qrcode": "^1.5.6",
