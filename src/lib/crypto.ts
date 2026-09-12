@@ -44,7 +44,11 @@ export function sealSecret(secretKey: Uint8Array, symKey: Uint8Array): string {
 export function openSecret(payload: string, symKey: Uint8Array): Uint8Array | null {
   const [n, b] = payload.split(":");
   if (!n || !b) return null;
-  return nacl.secretbox.open(decodeBase64(b), decodeBase64(n), symKey);
+  try {
+    return nacl.secretbox.open(decodeBase64(b), decodeBase64(n), symKey);
+  } catch {
+    return null; // not base64 — treat as undecryptable, never throw at a caller
+  }
 }
 
 // ── box: encrypt/decrypt a 1:1 message body ──
@@ -56,8 +60,14 @@ export function encryptFor(text: string, theirPubB64: string, mySecret: Uint8Arr
 export function decryptFrom(payload: string, theirPubB64: string, mySecret: Uint8Array): string | null {
   const [n, b] = payload.split(":");
   if (!n || !b) return null;
-  const open = nacl.box.open(decodeBase64(b), decodeBase64(n), decodeBase64(theirPubB64), mySecret);
-  return open ? encodeUTF8(open) : null;
+  try {
+    const open = nacl.box.open(decodeBase64(b), decodeBase64(n), decodeBase64(theirPubB64), mySecret);
+    return open ? encodeUTF8(open) : null;
+  } catch {
+    // Payload was not base64 (e.g. a peer with no keys sent this in the clear).
+    // Callers fall back on null; throwing here would drop the message entirely.
+    return null;
+  }
 }
 
 export const toB64 = encodeBase64;
@@ -76,8 +86,12 @@ export function sealLive(text: string, shared: Uint8Array): string {
 export function openLive(payload: string, shared: Uint8Array): string | null {
   const [n, b] = payload.split(":");
   if (!n || !b) return null;
-  const open = nacl.box.open.after(decodeBase64(b), decodeBase64(n), shared);
-  return open ? encodeUTF8(open) : null;
+  try {
+    const open = nacl.box.open.after(decodeBase64(b), decodeBase64(n), shared);
+    return open ? encodeUTF8(open) : null;
+  } catch {
+    return null;
+  }
 }
 
 // ── in-memory identity singleton + localStorage cache (per user) ──
@@ -116,4 +130,47 @@ export function clearIdentity(uid?: string) {
   } catch {
     /* ignore */
   }
+}
+
+// ── group E2E ──
+// A group has one random 32-byte symmetric key. Message bodies are sealed with
+// it (secretbox, same envelope as everything else: "nonce:ciphertext"). The key
+// itself is handed to each member by sealing it to their box public key, so the
+// server only ever holds ciphertext — same trust story as 1:1 DMs.
+//
+// The key is versioned by an "epoch". When a member leaves, the group mints the
+// next epoch and seals it only to who is left, so the departed member's copy
+// cannot read anything sent afterwards. Bodies carry their epoch in the envelope
+// ("<epoch>:<nonce>:<ciphertext>") so old history stays readable with old keys.
+export const newGroupKey = (): Uint8Array => nacl.randomBytes(nacl.secretbox.keyLength);
+
+// Bodies written before epochs existed are plain "<nonce>:<ciphertext>".
+export const LEGACY_EPOCH = 1;
+export function epochOf(payload: string): number {
+  const parts = payload.split(":");
+  if (parts.length < 3) return LEGACY_EPOCH;
+  const n = Number(parts[0]);
+  return Number.isInteger(n) && n > 0 ? n : LEGACY_EPOCH;
+}
+
+/** Seal the group key to one member (their pub, my secret). */
+export const sealGroupKeyFor = (groupKey: Uint8Array, theirPubB64: string, mySecret: Uint8Array): string =>
+  encryptFor(encodeBase64(groupKey), theirPubB64, mySecret);
+
+/** Open a sealed group key using the sealer's public key. */
+export function openGroupKey(sealed: string, senderPubB64: string, mySecret: Uint8Array): Uint8Array | null {
+  const b64 = decryptFrom(sealed, senderPubB64, mySecret);
+  return b64 ? decodeBase64(b64) : null;
+}
+
+export const encryptGroup = (text: string, groupKey: Uint8Array, epoch: number): string =>
+  `${epoch}:${sealSecret(decodeUTF8(text), groupKey)}`;
+
+/** Decrypt a body with the key for its own epoch. Null when that key is missing. */
+export function decryptGroup(payload: string, groupKey: Uint8Array | null | undefined): string | null {
+  if (!groupKey) return null;
+  const parts = payload.split(":");
+  const body = parts.length >= 3 ? parts.slice(1).join(":") : payload;
+  const open = openSecret(body, groupKey);
+  return open ? encodeUTF8(open) : null;
 }

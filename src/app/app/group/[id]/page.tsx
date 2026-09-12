@@ -16,7 +16,7 @@ export default function GroupPage() {
   const router = useRouter();
   const gid = String(params.id ?? "");
   const { profile, ready } = useProfile();
-  const { status, name, memberCount, onlineCount, typingName, messages, send, createPoll, react, setTyping, leave, deleteMessage } =
+  const { status, name, memberCount, onlineCount, typingName, messages, groupKeys, send, createPoll, react, setTyping, leave, deleteMessage } =
     useGroup(profile, gid);
 
   const [draft, setDraft] = useState("");
@@ -129,7 +129,7 @@ export default function GroupPage() {
             )}
             {m.pollId ? (
               <div className="msg-in max-w-[78%] rounded-2xl border border-border bg-[color:var(--panel)] p-3">
-                <Poll pollId={m.pollId} me={profile?.id ?? ""} />
+                <Poll pollId={m.pollId} me={profile?.id ?? ""} groupKeys={groupKeys} />
               </div>
             ) : (
               <button

@@ -6,6 +6,8 @@ import { supabase } from "@/lib/supabase";
 import { cleanText } from "@/lib/profanity";
 import type { Profile } from "@/hooks/useProfile";
 import type { Reaction } from "@/hooks/useDM";
+import { encryptGroup, decryptGroup, epochOf } from "@/lib/crypto";
+import { ensureGroupKeys, type GroupKeys } from "@/lib/groupKeys";
 
 export type GMsg = {
   id: string;
@@ -28,6 +30,12 @@ const setReaction = (list: Reaction[], mine: boolean, emoji: string | null): Rea
  * A group thread. History from `messages` (group_id set, members-only via RLS);
  * live delivery + typing + presence ride a shared `group:<id>` broadcast channel.
  * Text + reactions + replies only (media/voice are 1:1-only for now).
+ *
+ * Bodies are end-to-end encrypted with the group key (see lib/groupKeys). A
+ * group that predates E2E gets a key minted the next time its creator opens it,
+ * so everything sent from then on is encrypted while the old plaintext history
+ * still renders. Ping HQ is the deliberate exception — it is joined server-side
+ * with no member present to seal a key, so it stays a plaintext room.
  */
 export function useGroup(profile: Profile | null, groupId: string) {
   const me = profile?.id ?? null;
@@ -37,24 +45,33 @@ export function useGroup(profile: Profile | null, groupId: string) {
   const [onlineCount, setOnlineCount] = useState(1);
   const [typingName, setTypingName] = useState<string | null>(null);
   const [messages, setMessages] = useState<GMsg[]>([]);
+  const [groupKeys, setGroupKeys] = useState<GroupKeys | null>(null); // exposed for <Poll>
 
   const channel = useRef<RealtimeChannel | null>(null);
   const names = useRef<Record<string, string>>({}); // id -> @handle
   const msgsRef = useRef<GMsg[]>([]);
   const typingSent = useRef(0);
   const typingClear = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gkeys = useRef<GroupKeys | null>(null); // per-epoch group keys, null = plaintext group
   useEffect(() => {
     msgsRef.current = messages;
   }, [messages]);
 
   const label = useCallback((id: string) => names.current[id] ?? "someone", []);
 
+  // Encrypted rows need the group key; without it we show a lock rather than
+  // leaking the ciphertext into the bubble.
+  const plain = useCallback((raw: string, enc: boolean) => {
+    if (!enc) return raw;
+    return decryptGroup(raw, gkeys.current?.keys.get(epochOf(raw))) || "\u{1F512} Encrypted";
+  }, []);
+
   useEffect(() => {
     if (!me || !groupId) return;
     let cancelled = false;
 
     (async () => {
-      const { data: g } = await supabase.from("groups").select("name").eq("id", groupId).maybeSingle();
+      const { data: g } = await supabase.from("groups").select("name,created_by").eq("id", groupId).maybeSingle();
       if (cancelled) return;
       if (!g) {
         setStatus("denied"); // not a member (RLS) or missing
@@ -70,9 +87,14 @@ export function useGroup(profile: Profile | null, groupId: string) {
       (profs ?? []).forEach((p) => (map[String(p.id)] = String(p.username)));
       names.current = map;
 
+      // Must land before history is decoded — `plain` needs it.
+      gkeys.current = await ensureGroupKeys(groupId, me, g.created_by ? String(g.created_by) : null, ids);
+      if (cancelled) return;
+      setGroupKeys(gkeys.current);
+
       const { data: hist } = await supabase
         .from("messages")
-        .select("id,sender,body,reply_to,created_at,poll_id")
+        .select("id,sender,body,reply_to,created_at,poll_id,enc")
         .eq("group_id", groupId)
         .order("created_at", { ascending: true })
         .limit(300);
@@ -102,12 +124,12 @@ export function useGroup(profile: Profile | null, groupId: string) {
             id: String(m.id),
             mine: m.sender === me,
             senderName: label(String(m.sender)),
-            body: cleanText(String(m.body ?? "")),
+            body: cleanText(plain(String(m.body ?? ""), Boolean(m.enc))),
             created_at: String(m.created_at),
             reply: parent
               ? {
                   author: parent.sender === me ? "You" : `@${label(String(parent.sender))}`,
-                  snippet: cleanText(String(parent.body ?? "")).slice(0, 80),
+                  snippet: cleanText(plain(String(parent.body ?? ""), Boolean(parent.enc))).slice(0, 80),
                 }
               : null,
             reactions: reactMap.get(String(m.id)) ?? [],
@@ -127,7 +149,7 @@ export function useGroup(profile: Profile | null, groupId: string) {
             id: String(payload.id),
             mine: false,
             senderName: label(String(payload.sender)),
-            body: cleanText(String(payload.body ?? "")),
+            body: cleanText(plain(String(payload.body ?? ""), Boolean(payload.enc))),
             created_at: String(payload.created_at),
             reply: payload?.reply ?? null,
             reactions: [],
@@ -164,7 +186,7 @@ export function useGroup(profile: Profile | null, groupId: string) {
         channel.current = null;
       }
     };
-  }, [me, groupId, label]);
+  }, [me, groupId, label, plain]);
 
   const send = useCallback(
     async (text: string, replyToId?: string | null) => {
@@ -174,9 +196,12 @@ export function useGroup(profile: Profile | null, groupId: string) {
       const reply = parent
         ? { author: parent.mine ? "You" : `@${parent.senderName}`, snippet: parent.body.slice(0, 80) }
         : null;
+      const ep = gkeys.current?.current ?? null;
+      const k = ep === null ? null : gkeys.current!.keys.get(ep);
+      const stored = k ? encryptGroup(body, k, ep!) : body; // ciphertext once the group is keyed
       const { data, error } = await supabase
         .from("messages")
-        .insert({ sender: me, group_id: groupId, body, reply_to: replyToId ?? null })
+        .insert({ sender: me, group_id: groupId, body: stored, enc: Boolean(k), reply_to: replyToId ?? null })
         .select()
         .single();
       if (error || !data) return;
@@ -196,7 +221,9 @@ export function useGroup(profile: Profile | null, groupId: string) {
       channel.current?.send({
         type: "broadcast",
         event: "msg",
-        payload: { id: data.id, sender: me, body, created_at: data.created_at, reply },
+        // The broadcast carries the same ciphertext — Realtime relays it, it
+        // does not get to read it.
+        payload: { id: data.id, sender: me, body: stored, enc: Boolean(k), created_at: data.created_at, reply },
       });
     },
     [me, groupId]
@@ -207,16 +234,25 @@ export function useGroup(profile: Profile | null, groupId: string) {
       const q = question.trim();
       const opts = options.map((o) => o.trim()).filter(Boolean);
       if (!me || !q || opts.length < 2) return { ok: false, error: "Add a question and at least 2 options." };
+      const ep = gkeys.current?.current ?? null;
+      const k = ep === null ? null : gkeys.current!.keys.get(ep);
       const { data: poll, error: pErr } = await supabase
         .from("polls")
-        .insert({ group_id: groupId, creator: me, question: q, options: opts })
+        .insert({
+          group_id: groupId,
+          creator: me,
+          question: k ? encryptGroup(q, k, ep!) : q,
+          options: k ? opts.map((o) => encryptGroup(o, k, ep!)) : opts,
+          enc: Boolean(k),
+        })
         .select("id")
         .single();
       if (pErr || !poll) return { ok: false, error: "Couldn't create the poll." };
       const body = "📊 " + q;
+      const stored = k ? encryptGroup(body, k, ep!) : body;
       const { data, error } = await supabase
         .from("messages")
-        .insert({ sender: me, group_id: groupId, body, poll_id: poll.id })
+        .insert({ sender: me, group_id: groupId, body: stored, enc: Boolean(k), poll_id: poll.id })
         .select()
         .single();
       if (error || !data) return { ok: false, error: "Couldn't post the poll." };
@@ -228,7 +264,7 @@ export function useGroup(profile: Profile | null, groupId: string) {
       channel.current?.send({
         type: "broadcast",
         event: "msg",
-        payload: { id: data.id, sender: me, body, created_at: data.created_at, reply: null, pollId: poll.id },
+        payload: { id: data.id, sender: me, body: stored, enc: Boolean(k), created_at: data.created_at, reply: null, pollId: poll.id },
       });
       return { ok: true };
     },
@@ -290,5 +326,5 @@ export function useGroup(profile: Profile | null, groupId: string) {
     [me]
   );
 
-  return { status, name, memberCount, onlineCount, typingName, messages, send, createPoll, react, setTyping, leave, deleteMessage };
+  return { status, name, memberCount, onlineCount, typingName, messages, groupKeys, send, createPoll, react, setTyping, leave, deleteMessage };
 }

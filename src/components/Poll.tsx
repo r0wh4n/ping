@@ -2,21 +2,26 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
+import { decryptGroup, epochOf } from "@/lib/crypto";
+import type { GroupKeys } from "@/lib/groupKeys";
 
 // A group-chat poll. Self-contained: reads the poll + its votes (members-only via
 // RLS), renders result bars, and lets you vote/change. Counts refresh on your
 // vote and on mount (cross-user live vote sync is a later enhancement).
-export default function Poll({ pollId, me }: { pollId: string; me: string }) {
+export default function Poll({ pollId, me, groupKeys }: { pollId: string; me: string; groupKeys: GroupKeys | null }) {
   const [poll, setPoll] = useState<{ question: string; options: string[] } | null>(null);
   const [counts, setCounts] = useState<number[]>([]);
   const [myChoice, setMyChoice] = useState<number | null>(null);
   const [total, setTotal] = useState(0);
 
   const load = useCallback(async () => {
-    const { data: p } = await supabase.from("polls").select("question, options").eq("id", pollId).maybeSingle();
+    const { data: p } = await supabase.from("polls").select("question, options, enc").eq("id", pollId).maybeSingle();
     if (!p) return;
-    const options = Array.isArray(p.options) ? p.options.map(String) : [];
-    setPoll({ question: String(p.question), options });
+    // Encrypted polls carry question and options under the group key; a poll
+    // written before E2E has enc=false and reads straight through.
+    const open = (v: string) => (p.enc ? decryptGroup(v, groupKeys?.keys.get(epochOf(v))) || "\u{1F512}" : v);
+    const options = (Array.isArray(p.options) ? p.options.map(String) : []).map(open);
+    setPoll({ question: open(String(p.question)), options });
     const { data: votes } = await supabase.from("poll_votes").select("voter, choice").eq("poll_id", pollId);
     const c = new Array(options.length).fill(0) as number[];
     let mine: number | null = null;
@@ -28,7 +33,7 @@ export default function Poll({ pollId, me }: { pollId: string; me: string }) {
     setCounts(c);
     setMyChoice(mine);
     setTotal((votes ?? []).length);
-  }, [pollId, me]);
+  }, [pollId, me, groupKeys]);
 
   useEffect(() => {
     load();
