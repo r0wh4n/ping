@@ -16,3 +16,9 @@ export const supabase = createClient(url, anon, {
   realtime: { params: { eventsPerSecond: 20 } },
   auth: { persistSession: true, autoRefreshToken: true },
 });
+
+// Dev only: lets the Playwright signalling test drive real realtime channels
+// through this same client. Guarded so it never reaches a production bundle.
+if (process.env.NODE_ENV !== "production" && typeof window !== "undefined") {
+  (window as unknown as { __supabase?: typeof supabase }).__supabase = supabase;
+}
