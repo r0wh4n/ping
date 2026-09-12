@@ -1,0 +1,27 @@
+# A TURN relay for Ping calls.
+#
+#   TURN_SECRET=$(openssl rand -hex 32) TURN_REALM=theping.chat docker compose up -d
+#
+# Then set the SAME secret on the web app (server-side, never NEXT_PUBLIC_):
+#   TURN_SECRET=<same value>
+#   TURN_URL=turn:turn.theping.chat:3478,turns:turn.theping.chat:5349
+#
+# Host networking is not optional: TURN hands out the relay's own address, and
+# behind Docker's NAT it would advertise a container IP nobody can reach.
+services:
+  coturn:
+    image: coturn/coturn:4.6
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./turnserver.conf:/etc/coturn/turnserver.conf:ro
+      # TLS on 5349 is what gets calls out of networks that only allow HTTPS.
+      # Point these at a real certificate for the TURN hostname.
+      - /etc/letsencrypt/live/turn.theping.chat/fullchain.pem:/etc/coturn/cert.pem:ro
+      - /etc/letsencrypt/live/turn.theping.chat/privkey.pem:/etc/coturn/pkey.pem:ro
+    command: >
+      -c /etc/coturn/turnserver.conf
+      --static-auth-secret=${TURN_SECRET:?set TURN_SECRET}
+      --realm=${TURN_REALM:-theping.chat}
+      --cert=/etc/coturn/cert.pem
+      --pkey=/etc/coturn/pkey.pem
