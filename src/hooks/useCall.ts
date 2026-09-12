@@ -15,6 +15,26 @@ export type CallPeer = { id: string; username: string; pub: string | null };
 // than only inside an open thread.
 const chanFor = (uid: string) => `calls:${uid}`;
 const RING_MS = 35_000;
+const REACH_MS = 10_000; // how long to wait for the signalling channel before giving up
+
+/**
+ * Call tracing, off unless asked for: `?calldebug=1` once, or
+ * localStorage.ping_call_debug = "1". Every signalling step and connection
+ * state change is logged, because a call that fails silently is impossible to
+ * report usefully — "connecting but not ringing" has four different causes.
+ */
+function debugOn(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.location.search.includes("calldebug")) {
+      localStorage.setItem("ping_call_debug", "1");
+      return true;
+    }
+    return localStorage.getItem("ping_call_debug") === "1";
+  } catch {
+    return false;
+  }
+}
 
 
 // Media itself is always DTLS-SRTP encrypted by WebRTC. A TURN relay only ever
@@ -98,9 +118,22 @@ export function useCall(profile: Profile | null) {
   const outgoing = useRef(false); // I dialled — so I am the one who logs the call
   const connected = useRef(false);
   const stateRef = useRef<CallState>("idle");
+  const reachTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const hasRelay = useRef(false); // a TURN server was in the ICE config for this call
+  const [debug] = useState(debugOn);
+  const [tracelog, setTracelog] = useState<string[]>([]);
   useEffect(() => {
     stateRef.current = state;
   }, [state]);
+
+  const trace = useCallback(
+    (msg: string) => {
+      if (!debug) return;
+      console.log("[call]", msg);
+      setTracelog((l) => [...l.slice(-11), `${new Date().toISOString().slice(14, 22)} ${msg}`]);
+    },
+    [debug]
+  );
 
   // ── signalling payloads are sealed to the peer when both sides have keys ──
   const seal = useCallback((obj: unknown): string => {
@@ -133,25 +166,49 @@ export function useCall(profile: Profile | null) {
    * same topic collide instead of queueing. The candidates never arrived, so
    * ICE never completed and the call sat there connecting forever.
    */
-  const openPeer = useCallback((peerId: string) => {
+  const openPeer = useCallback((peerId: string, onFail?: (why: string) => void) => {
     if (peerCh.current) return;
-    const ch = supabase.channel(chanFor(peerId));
+    const topic = chanFor(peerId);
+    // A channel from a previous call may still be tearing down on this topic.
+    // Joining the same topic twice collides and never subscribes, which strands
+    // the offer in the outbox — the caller spins and the callee never rings.
+    supabase.getChannels().forEach((c) => {
+      if (c.topic === topic || c.topic === `realtime:${topic}`) supabase.removeChannel(c);
+    });
+
+    const ch = supabase.channel(topic);
     peerCh.current = ch;
     peerReady.current = false;
-    ch.subscribe((status) => {
-      if (status !== "SUBSCRIBED") return;
-      peerReady.current = true;
-      const queued = outbox.current;
-      outbox.current = [];
-      queued.forEach((m) => ch.send({ type: "broadcast", ...m }));
+    trace(`opening ${topic}`);
+    ch.subscribe((status, err) => {
+      trace(`channel ${topic}: ${status}${err ? ` (${err})` : ""}`);
+      if (status === "SUBSCRIBED") {
+        peerReady.current = true;
+        const queued = outbox.current;
+        outbox.current = [];
+        queued.forEach((m) => {
+          trace(`flush ${m.event}`);
+          ch.send({ type: "broadcast", ...m });
+        });
+        return;
+      }
+      if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") onFail?.("Couldn't reach them.");
     });
-  }, []);
+  }, [trace]);
 
   /** Send to the peer, queueing anything raised before the channel is ready. */
-  const signal = useCallback((event: string, payload: Record<string, unknown>) => {
-    if (peerCh.current && peerReady.current) peerCh.current.send({ type: "broadcast", event, payload });
-    else outbox.current.push({ event, payload });
-  }, []);
+  const signal = useCallback(
+    (event: string, payload: Record<string, unknown>) => {
+      if (peerCh.current && peerReady.current) {
+        trace(`send ${event}`);
+        peerCh.current.send({ type: "broadcast", event, payload });
+      } else {
+        trace(`queue ${event} (channel not ready)`);
+        outbox.current.push({ event, payload });
+      }
+    },
+    [trace]
+  );
 
   /** One-shot send to someone who is not the current peer (turning down a second caller). */
   const signalOnce = useCallback((toUser: string, event: string, payload: Record<string, unknown>) => {
@@ -190,6 +247,8 @@ export function useCall(profile: Profile | null) {
   const cleanup = useCallback(() => {
     if (ringTimer.current) clearTimeout(ringTimer.current);
     ringTimer.current = null;
+    if (reachTimer.current) clearTimeout(reachTimer.current);
+    reachTimer.current = null;
     pc.current?.close();
     pc.current = null;
     local.current?.getTracks().forEach((t) => t.stop());
@@ -254,6 +313,7 @@ export function useCall(profile: Profile | null) {
         if (e.candidate && p && me) signal("ice", { from: me, cand: seal(e.candidate.toJSON()) });
       };
       conn.onconnectionstatechange = () => {
+        trace(`peer connection: ${conn.connectionState}`);
         if (conn.connectionState === "connected") {
           if (ringTimer.current) clearTimeout(ringTimer.current);
           connected.current = true;
@@ -261,12 +321,13 @@ export function useCall(profile: Profile | null) {
           setState("connected");
           setStartedAt(startedAtRef.current);
         }
-        if (conn.connectionState === "failed") finish("Connection failed.");
+        if (conn.connectionState === "failed")
+          finish(hasRelay.current ? "Connection failed." : "Connection failed — this network needs a TURN relay.");
       };
       pc.current = conn;
       return conn;
     },
-    [me, signal, seal, finish]
+    [me, signal, seal, finish, trace]
   );
 
   const getMedia = useCallback(async (video: boolean) => {
@@ -302,15 +363,22 @@ export function useCall(profile: Profile | null) {
       };
       peerRef.current = p;
       setPeer(p);
-      openPeer(p.id); // before any ICE can fire
+      openPeer(p.id, finish); // before any ICE can fire
       setWithVideo(video);
       setState("calling");
       try {
         const [stream, servers] = await Promise.all([getMedia(video), iceServers()]);
+        hasRelay.current = servers.some((x) => String(x.urls).includes("turn"));
+        trace(`ice servers: ${servers.length}, relay: ${hasRelay.current}`);
         const conn = makePc(stream, servers);
         const sdp = await conn.createOffer();
         await conn.setLocalDescription(sdp);
         signal("offer", { from: me, fromName: myName, video, sdp: seal(sdp) });
+        // If the channel never subscribes the offer just sits in the outbox and
+        // this side spins forever. Say so instead.
+        reachTimer.current = setTimeout(() => {
+          if (!peerReady.current) finish("Couldn't reach them — check your connection.");
+        }, REACH_MS);
         // Set only once the offer is away: a mic/camera failure above must not
         // leave a "missed call" in their thread for a call that never rang.
         outgoing.current = true;
@@ -319,7 +387,7 @@ export function useCall(profile: Profile | null) {
         finish("Couldn't access your mic or camera.");
       }
     },
-    [me, myName, getMedia, makePc, openPeer, signal, seal, finish]
+    [me, myName, getMedia, makePc, openPeer, signal, seal, finish, trace]
   );
 
   // ── incoming ──
@@ -329,6 +397,8 @@ export function useCall(profile: Profile | null) {
     if (!me || !p || !incoming) return;
     try {
       const [stream, servers] = await Promise.all([getMedia(withVideo), iceServers()]);
+      hasRelay.current = servers.some((x) => String(x.urls).includes("turn"));
+      trace(`ice servers: ${servers.length}, relay: ${hasRelay.current}`);
       const conn = makePc(stream, servers);
       await conn.setRemoteDescription(incoming);
       await drain(conn);
@@ -340,7 +410,7 @@ export function useCall(profile: Profile | null) {
       signal("end", { from: me });
       finish("Couldn't access your mic or camera.");
     }
-  }, [me, withVideo, getMedia, makePc, drain, signal, seal, finish]);
+  }, [me, withVideo, getMedia, makePc, drain, signal, seal, finish, trace]);
 
   const decline = useCallback(() => {
     const p = peerRef.current;
@@ -378,7 +448,7 @@ export function useCall(profile: Profile | null) {
       };
       peerRef.current = p;
       setPeer(p);
-      openPeer(from);
+      openPeer(from, finish);
       const sdp = unseal<RTCSessionDescriptionInit>(String(payload?.sdp ?? ""));
       if (!sdp) return;
       offer.current = sdp;
@@ -417,7 +487,7 @@ export function useCall(profile: Profile | null) {
       supabase.removeChannel(ch);
       mine.current = null;
     };
-  }, [me, signal, signalOnce, openPeer, unseal, drain, finish, cleanup]);
+  }, [me, signal, signalOnce, openPeer, unseal, drain, finish, cleanup, trace]);
 
   // Drop the call if the tab goes away mid-conversation.
   useEffect(() => () => cleanup(), [cleanup]);
@@ -437,6 +507,8 @@ export function useCall(profile: Profile | null) {
   }, []);
 
   return {
+    debug,
+    tracelog,
     state,
     peer,
     withVideo,

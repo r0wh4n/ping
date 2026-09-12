@@ -72,7 +72,7 @@ const CAM = "M23 7l-7 5 7 5V7zM14 5H3a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h11a2 2 0 0 
 
 export function CallProvider({ profile, children }: { profile: Profile | null; children: React.ReactNode }) {
   const call = useCall(profile);
-  const { state, peer, withVideo, muted, camOn, error, localStream, remoteStream, startedAt } = call;
+  const { state, peer, withVideo, muted, camOn, error, localStream, remoteStream, startedAt, debug, tracelog } = call;
   // Tick a clock while connected and derive the duration from it, rather than
   // storing elapsed seconds — that would mean a setState in the effect body.
   const [now, setNow] = useState(0);
@@ -102,6 +102,15 @@ export function CallProvider({ profile, children }: { profile: Profile | null; c
             <p className="mono text-2xl">@{peer?.username ?? ""}</p>
             {state === "connected" && (
               <p className="text-xs text-[color:var(--faint)]">End-to-end encrypted</p>
+            )}
+            {/* A failed call used to look identical to a ringing one. Say what went wrong. */}
+            {error && state !== "connected" && (
+              <p className="mono mt-1 max-w-xs text-sm text-[color:var(--danger)]">{error}</p>
+            )}
+            {debug && tracelog.length > 0 && (
+              <pre className="mono mt-3 max-h-40 max-w-full overflow-auto whitespace-pre-wrap rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--panel)] p-2 text-left text-[10px] leading-snug text-[color:var(--faint)]">
+                {tracelog.join("\n")}
+              </pre>
             )}
           </div>
 
