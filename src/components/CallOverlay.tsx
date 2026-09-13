@@ -2,6 +2,7 @@
 
 import { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useCall } from "@/hooks/useCall";
+import { primeAudio } from "@/lib/ringtone";
 import type { Profile } from "@/hooks/useProfile";
 
 type CallApi = { start: (username: string, video?: boolean) => void; busy: boolean };
@@ -76,6 +77,18 @@ export function CallProvider({ profile, children }: { profile: Profile | null; c
   // Tick a clock while connected and derive the duration from it, rather than
   // storing elapsed seconds — that would mean a setState in the effect body.
   const [now, setNow] = useState(0);
+  // Unlock audio on the first interaction anywhere in the app, so a call that
+  // arrives later can actually ring instead of being blocked by autoplay rules.
+  useEffect(() => {
+    const on = () => primeAudio();
+    window.addEventListener("pointerdown", on, { once: true });
+    window.addEventListener("keydown", on, { once: true });
+    return () => {
+      window.removeEventListener("pointerdown", on);
+      window.removeEventListener("keydown", on);
+    };
+  }, []);
+
   useEffect(() => {
     if (!startedAt) return;
     const t = setInterval(() => setNow(Date.now()), 500);

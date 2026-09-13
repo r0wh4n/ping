@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { getIdentity, encryptFor, decryptFrom } from "@/lib/crypto";
 import type { Profile } from "@/hooks/useProfile";
 import { keepsOutgoingCall } from "@/lib/call";
+import { playRing, startVibrate, notifyIncoming } from "@/lib/ringtone";
 
 export type CallState = "idle" | "calling" | "ringing" | "connected" | "ended";
 export type CallPeer = { id: string; username: string; pub: string | null };
@@ -488,6 +489,24 @@ export function useCall(profile: Profile | null) {
       mine.current = null;
     };
   }, [me, signal, signalOnce, openPeer, unseal, drain, finish, cleanup, trace]);
+
+  /**
+   * Ring, buzz and raise a notification while a call is pending — keyed on
+   * state so every exit (answered, declined, missed, failed) tears all three
+   * down without each of those paths having to remember to.
+   */
+  useEffect(() => {
+    if (state !== "ringing" && state !== "calling") return;
+    const incoming = state === "ringing";
+    const ring = playRing(incoming ? "incoming" : "outgoing", RING_MS / 1000 + 5);
+    const unbuzz = incoming ? startVibrate() : () => {};
+    const unnotify = incoming ? notifyIncoming(peer?.username ?? "someone", withVideo) : () => {};
+    return () => {
+      ring.stop();
+      unbuzz();
+      unnotify();
+    };
+  }, [state, peer?.username, withVideo]);
 
   // Drop the call if the tab goes away mid-conversation.
   useEffect(() => () => cleanup(), [cleanup]);

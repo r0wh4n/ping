@@ -93,7 +93,7 @@ test("a call placed right after the previous one still reaches the peer", async 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const sb = (window as any).__supabase;
       const open = (t: string) =>
-        new Promise<{ ch: never; ok: boolean }>((res) => {
+        new Promise<{ ch: unknown; ok: boolean }>((res) => {
           // Purge stale channels on this topic first — the fix under test.
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           sb.getChannels().forEach((c: any) => {
