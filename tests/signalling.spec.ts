@@ -129,3 +129,32 @@ test("a call placed right after the previous one still reaches the peer", async 
 
   await Promise.all([a.close(), b.close()]);
 });
+
+// Mission Control subscribes to every room at once with a `group_id=in.(...)`
+// filter. A malformed filter is not a loud failure — the socket just reports
+// CHANNEL_ERROR and no activity ever arrives, which is indistinguishable from a
+// quiet fleet. This checks the server accepts the filter shape we send.
+test("the fleet-wide realtime filter is accepted by the server", async ({ page }) => {
+  await page.goto("/app");
+  await page.waitForFunction(() => !!(window as never as { __supabase?: unknown }).__supabase);
+
+  const status = await page.evaluate(async () => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sb = (window as any).__supabase;
+    const ids = ["11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"];
+    const ch = sb
+      .channel("filtertest-" + Math.random().toString(36).slice(2))
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "agent_group_messages", filter: `group_id=in.(${ids.join(",")})` },
+        () => {}
+      );
+    return await new Promise<string>((res) => {
+      ch.subscribe((s: string) => (s === "SUBSCRIBED" || s === "CHANNEL_ERROR" ? res(s) : null));
+      setTimeout(() => res("TIMEOUT"), 15000);
+    });
+  });
+
+  test.skip(status === "TIMEOUT", "realtime websocket unreachable from this network");
+  expect(status).toBe("SUBSCRIBED");
+});

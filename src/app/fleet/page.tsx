@@ -11,8 +11,9 @@ type Msg = { id?: string; from: string; kind: string; title: string | null; text
 type Member = { id: string; name: string; last_read: string | null; joined_at: string };
 const KINDS = ["all", "chat", "context", "log", "event"] as const;
 
-const TIMELINE_MS = 12000; // backstop poll; realtime handles instant delivery
-const ROOMS_MS = 15000;
+// No polling: activity arrives over the realtime socket for every room at once.
+// A reconciliation runs when the socket (re)subscribes and when the tab comes
+// back into focus, which covers the only two ways the stream can miss anything.
 const ACTIVE_WINDOW = 10 * 60 * 1000; // "active" = activity within 10 min
 
 function ago(iso: string | null): string {
@@ -60,6 +61,17 @@ export default function FleetPage() {
   const nearBottom = useRef(true);
   const prevHeight = useRef<number | null>(null);
 
+  // The room being read, as a ref: the fleet subscription reads it inside its
+  // handler and must not resubscribe every time you click a different room.
+  const activeRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeRef.current = active;
+  }, [active]);
+
+  // Identity of the subscription: the set of rooms, not the room objects, which
+  // the handler mutates on every incoming event.
+  const roomIds = useMemo(() => rooms.map((r) => r.id).sort().join(","), [rooms]);
+
   const loadRooms = useCallback(async () => {
     const { data } = await supabase.functions.invoke("group-api", { body: { action: "rooms_overview" } });
     const rs: Room[] = data?.ok && Array.isArray(data.rooms) ? data.rooms : [];
@@ -70,13 +82,7 @@ export default function FleetPage() {
 
   useEffect(() => {
     if (!profile) return;
-    let stopped = false;
     loadRooms();
-    const id = setInterval(() => !stopped && loadRooms(), ROOMS_MS);
-    return () => {
-      stopped = true;
-      clearInterval(id);
-    };
   }, [profile, loadRooms]);
 
   const loadTimeline = useCallback(async (gid: string) => {
@@ -103,23 +109,39 @@ export default function FleetPage() {
     setConfirmDelete(false);
     nearBottom.current = true;
     loadTimeline(active).finally(() => !stopped && setLoading(false));
-    const id = setInterval(() => !stopped && loadTimeline(active), TIMELINE_MS);
     return () => {
       stopped = true;
-      clearInterval(id);
     };
   }, [active, loadTimeline]);
 
-  // Realtime: append live inserts for the active room (poll above is a backstop).
+  /**
+   * One subscription covering every room in the fleet, so the sidebar keeps
+   * moving while you are reading a different room — an agent committing in room
+   * B used to stay invisible until the next poll. The room being read also gets
+   * its timeline appended.
+   *
+   * Keyed on the set of room ids rather than `rooms`, since the handler edits
+   * `rooms` and would otherwise resubscribe on every event.
+   */
   useEffect(() => {
-    if (!active) return;
+    if (!profile || !roomIds) return;
     const ch = supabase
-      .channel(`fleet:${active}`)
+      .channel(`fleet:${profile.id}`)
       .on(
         "postgres_changes",
-        { event: "INSERT", schema: "public", table: "agent_group_messages", filter: `group_id=eq.${active}` },
+        { event: "INSERT", schema: "public", table: "agent_group_messages", filter: `group_id=in.(${roomIds})` },
         ({ new: row }) => {
-          const m = shapeRow(row as Record<string, unknown>);
+          const r = row as Record<string, unknown>;
+          const gid = String(r.group_id ?? "");
+          const m = shapeRow(r);
+
+          setRooms((cur) =>
+            cur
+              .map((x) => (x.id === gid ? { ...x, last_at: m.created_at, last_from: m.from, msgs_24h: x.msgs_24h + 1 } : x))
+              .sort((a, b) => (b.last_at ? Date.parse(b.last_at) : 0) - (a.last_at ? Date.parse(a.last_at) : 0))
+          );
+
+          if (gid !== activeRef.current) return;
           setMsgs((cur) =>
             cur.some((x) => (m.id && x.id === m.id) || (x.created_at === m.created_at && x.from === m.from && x.text === m.text))
               ? cur
@@ -128,11 +150,29 @@ export default function FleetPage() {
           setTick((t) => t + 1);
         }
       )
-      .subscribe();
+      .subscribe((status) => {
+        // Covers the first connect and every reconnect after a drop, which is
+        // where a poll would otherwise have been earning its keep.
+        if (status === "SUBSCRIBED") {
+          loadRooms();
+          if (activeRef.current) loadTimeline(activeRef.current);
+        }
+      });
     return () => {
       supabase.removeChannel(ch);
     };
-  }, [active]);
+  }, [profile, roomIds, loadRooms, loadTimeline]);
+
+  // A backgrounded tab can have its socket suspended; reconcile on the way back.
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== "visible") return;
+      loadRooms();
+      if (activeRef.current) loadTimeline(activeRef.current);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
+  }, [loadRooms, loadTimeline]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -196,7 +236,7 @@ export default function FleetPage() {
     window.history.replaceState({}, "", window.location.pathname);
   }, []);
 
-  // Roster (no tokens) via RPC; presence = last_read recency. Refreshed on a timer.
+  // Roster (no tokens) via RPC; presence = last_read recency.
   const loadMembers = useCallback(async (gid: string) => {
     const { data } = await supabase.rpc("list_agent_members", { p_group: gid });
     setMembers(Array.isArray(data) ? (data as Member[]) : []);
@@ -208,9 +248,10 @@ export default function FleetPage() {
       return;
     }
     loadMembers(active);
-    const id = setInterval(() => loadMembers(active), ROOMS_MS);
-    return () => clearInterval(id);
-  }, [active, loadMembers]);
+    // `tick` advances on every message the fleet socket delivers for this room,
+    // and an agent joining or leaving posts one — so the roster refreshes off
+    // the same stream rather than its own timer.
+  }, [active, loadMembers, tick]);
 
   const kick = async (memberId: string) => {
     if (!active) return;
