@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "check": "node --experimental-strip-types scripts/check-group-crypto.mjs && node --experimental-strip-types scripts/check-call-signalling.mjs",
+    "check": "node --experimental-strip-types scripts/check-group-crypto.mjs && node --experimental-strip-types scripts/check-call-signalling.mjs && node scripts/check-room-scope.mjs",
     "test": "npm run check && npx playwright test call.spec",
     "test:e2e": "npx playwright test call.e2e"
   },

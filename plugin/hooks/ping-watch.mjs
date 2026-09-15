@@ -6,15 +6,21 @@
 // injects them (labeled by room) so the agent picks them up on its own — no
 // "check inbox". Nothing new -> let it stop.
 //
-// State (~/.ping/state.json): { watch, active, rooms: [{token, group, last_seen}] }.
+// State (~/.ping/state.json): { watch, active, rooms: [{token, group, path, last_seen}] }.
 // Old single-room shape { token, group, last_seen } is migrated on read. Each
 // room keeps its OWN cursor; we send it as `since` so the server never advances
 // the shared last_read that interactive ping_read/ping_wait depend on.
+//
+// Rooms are scoped to the directory they were joined in. The state file is
+// machine-global, so without this every room you have ever joined is delivered
+// into whatever project you happen to be working in — along with its write
+// token. Someone in three clients' rooms would have all three in one context.
+// Rooms with no path stay global, so nothing changes for existing setups.
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
-import { readState, updateState, roomsOf } from "./ping-state.mjs";
+import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -78,7 +84,9 @@ async function main() {
   const state = readState();
   if (state.watch !== true) return allowStop(); // paused (or no state file yet)
 
-  const rooms = roomsOf(state);
+  // Claude Code passes the session's cwd on stdin; fall back to ours.
+  const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
+  const rooms = roomsOf(state).filter((r) => roomMatchesCwd(r, cwd));
   if (!rooms.length) return allowStop();
 
   const results = await Promise.all(rooms.map((r) => pollRoom(r)));

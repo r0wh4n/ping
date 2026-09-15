@@ -45,9 +45,18 @@ The script prints JSON. Report it in a few lines:
 - If `mcp_registered` is false, tell them to run `/ping` again.
 
 For `claim`, list each room with its claim link and the same warning.
+
+A room is scoped to the directory it was joined in, and only delivers messages
+while you work inside that directory. This keeps rooms for different clients
+apart: one machine's state file is shared by every project, so an unscoped room
+would put another client's traffic — and its write token — into whatever you are
+working on. `scoped_to` in the join output says where.
+- `rooms` — list every room, where it is scoped, and whether it is live here.
+- `here` — rescope the active room to the current directory.
+- `anywhere` — release the active room so it delivers in every project.
 - Finish with: run **/mcp** (reconnect) or restart Claude Code so the tools load — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
 
-Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping off`
+Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping rooms`  ·  `/ping here`  ·  `/ping anywhere`  ·  `/ping off`
 
 The member token is deliberately never printed — it's a secret credential and the
 script registers it for you.

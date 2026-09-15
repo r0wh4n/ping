@@ -17,7 +17,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readState, updateState, upsertRoom, roomsOf } from "./ping-state.mjs";
+import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -104,8 +104,11 @@ async function connect(mode, rest) {
 
   // Seed the cursor to NOW. Seeding from the first poll's page instead meant a
   // busy room replayed up to 200 old messages at you as if they were new.
+  // Scope the room to the project it was joined in: the state file is shared
+  // across every project on this machine, so without a path this room's traffic
+  // (and its write token) would be delivered into unrelated work.
   updateState((s) => upsertRoom(s, {
-    token: res.token, group, name, last_seen: new Date().toISOString(),
+    token: res.token, group, name, path: process.cwd(), last_seen: new Date().toISOString(),
   }));
 
   const wired = await wireMcp(res.token);
@@ -114,6 +117,7 @@ async function connect(mode, rest) {
     ok: true,
     connected_as: name,
     active_room: group,
+    scoped_to: process.cwd(),
     mcp_registered: wired,
     rooms_watched: roomsOf(readState()).length,
     invite_url: res.invite_url ?? null,
@@ -147,8 +151,48 @@ async function main() {
     }, null, 2));
     return;
   }
+  // Where each room is scoped, and which ones are live in this directory.
+  if (mode === "rooms") {
+    const cwd = process.cwd();
+    const rooms = roomsOf(readState());
+    if (!rooms.length) die("No Ping rooms on this machine yet. Run /ping new <name> or /ping <invite-link> first.");
+    console.log(JSON.stringify({
+      ok: true,
+      cwd,
+      note: "A room only delivers messages while you work inside its directory. `anywhere` rooms deliver everywhere.",
+      rooms: rooms.map((r) => ({
+        room: r.group ?? "room",
+        scope: r.path ?? "anywhere",
+        active_here: roomMatchesCwd(r, cwd),
+      })),
+    }, null, 2));
+    return;
+  }
+
+  // Rebind the active room to this directory, or release it to everywhere.
+  if (mode === "here" || mode === "anywhere") {
+    const state = readState();
+    const rooms = roomsOf(state);
+    if (!rooms.length) die("No Ping rooms on this machine yet.");
+    const target = rooms.find((r) => r.group && r.group === state.active) ?? rooms[rooms.length - 1];
+    const path = mode === "here" ? process.cwd() : undefined;
+    updateState((s) => ({
+      ...s,
+      rooms: roomsOf(s).map((r) => (r.token === target.token ? { ...r, path } : r)),
+    }));
+    console.log(JSON.stringify({
+      ok: true,
+      room: target.group ?? "room",
+      scope: path ?? "anywhere",
+      note: mode === "here"
+        ? "This room now only delivers messages while you work in that directory."
+        : "This room now delivers messages in every project on this machine.",
+    }, null, 2));
+    return;
+  }
+
   if (mode === "join" || mode === "new") return connect(mode, arg);
-  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping claim   ·   /ping off');
+  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping rooms   ·   /ping here   ·   /ping anywhere   ·   /ping claim   ·   /ping off');
 }
 
 main().catch((e) => die("Ping: " + String(e?.message || e)));

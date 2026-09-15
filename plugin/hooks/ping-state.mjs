@@ -11,7 +11,7 @@
 
 import { readFileSync, writeFileSync, renameSync, mkdirSync, openSync, closeSync, unlinkSync, statSync, chmodSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 
 export const DIR = join(homedir(), ".ping");
 export const STATE = join(DIR, "state.json");
@@ -77,6 +77,31 @@ export function roomsOf(state) {
   if (Array.isArray(state?.rooms)) return state.rooms.filter((r) => r && r.token);
   if (state?.token) return [{ token: state.token, group: state.group, name: state.name, last_seen: state.last_seen }];
   return [];
+}
+
+// Strip a trailing separator so "/work/atom/" and "/work/atom" compare equal.
+const norm = (p) => {
+  const r = resolve(String(p));
+  return r.length > 1 && r.endsWith(sep) ? r.slice(0, -1) : r;
+};
+
+/**
+ * Should this room surface while working in `cwd`?
+ *
+ * A room joined inside a project carries that project's path, and only shows up
+ * while you are in it — so someone in three clients' rooms does not get a third
+ * client's traffic (and write token) handed to their agent while working on the
+ * first. Rooms with no path are global: that is every room joined before this
+ * existed, and anything explicitly set with `/ping anywhere`.
+ */
+export function roomMatchesCwd(room, cwd) {
+  if (!room?.path) return true; // global room
+  if (!cwd) return true; // unknown cwd — never hide a room on a guess
+  const base = norm(room.path);
+  const here = norm(cwd);
+  // Prefix match on a separator boundary: /work/atom must not swallow
+  // /work/atom-legacy, but must still cover /work/atom/frontend.
+  return here === base || here.startsWith(base + sep);
 }
 
 // Add or refresh a room. Dedupes on token AND on group name: re-running /ping
