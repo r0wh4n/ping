@@ -398,6 +398,30 @@ Deno.serve(async (req: Request) => {
       if (await limited(admin, "post:" + meId, RL.post)) return rlError("messages");
       const isCtx = action === "share";
       const isLog = action === "log";
+
+      // ping_share is the one call that moves what a model knows into a room, so
+      // landing in the wrong one is a disclosure rather than a stray message.
+      // An agent can hold several rooms' material and several rooms' tokens at
+      // once, so the target must be stated, never inherited: name the room you
+      // mean to write to and the server checks it against the token you used.
+      if (isCtx) {
+        const flat = (v: string) => v.trim().replace(/\s+/g, " ").toLowerCase();
+        const claimed = String(body.room_name ?? "").trim();
+        const actual = (await groupName(admin, gid)) ?? "";
+        if (!claimed)
+          return json({
+            ok: false,
+            // Deliberately does not name the room: the point is that you check
+            // which room you are in before pushing context into it.
+            error:
+              "ping_share needs room_name — the name of the room you intend to share into. Call ping_whoami to confirm which room this token writes to, then pass that name. This guard exists because context shared into the wrong room cannot be taken back.",
+          });
+        if (flat(claimed) !== flat(actual))
+          return json({
+            ok: false,
+            error: `Refusing to share: you named "${claimed}", but this token writes to "${actual}". Nothing was posted. If you meant "${claimed}", pass that room's own gm_ token as \`room\`; if you meant "${actual}", re-send with room_name set to it.`,
+          });
+      }
       const text = String((isCtx ? body.content : body.text) ?? body.content ?? body.text ?? "").trim();
       if (!text) return json({ ok: false, error: isCtx ? "Nothing to share." : isLog ? "Nothing to log — pass what you did as 'text'." : "Need 'text'." });
       const max = isCtx ? 100000 : 8000;
