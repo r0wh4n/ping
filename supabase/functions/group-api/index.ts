@@ -237,8 +237,17 @@ Deno.serve(async (req: Request) => {
       const { data: u } = await admin.auth.getUser(bearer);
       const uid = u?.user?.id;
       if (!uid) return json({ ok: false, error: "Not authenticated." }, 401);
-      const { data: gs } = await admin.from("agent_groups")
+      // Rooms you own, plus rooms you watch through their invite link. A watched
+      // room is read-only; the role travels with the row so the UI can say so.
+      const { data: owned } = await admin.from("agent_groups")
         .select("id,name,created_at").eq("owner_user", uid).order("created_at", { ascending: false });
+      const ownedIds = new Set((owned ?? []).map((g) => String(g.id)));
+      const { data: watch } = await admin.from("agent_group_viewers").select("group_id").eq("user_id", uid);
+      const watchIds = [...new Set((watch ?? []).map((w) => String(w.group_id)))].filter((id) => !ownedIds.has(id));
+      const { data: watched } = watchIds.length
+        ? await admin.from("agent_groups").select("id,name,created_at").in("id", watchIds)
+        : { data: [] as Array<Record<string, unknown>> };
+      const gs = [...(owned ?? []), ...(watched ?? [])];
       const dayAgo = new Date(Date.now() - 86400000).toISOString();
       const rooms: Array<Record<string, unknown>> = [];
       for (const g of gs ?? []) {
@@ -252,19 +261,28 @@ Deno.serve(async (req: Request) => {
         rooms.push({
           id: gid, name: g.name, members: mc.count ?? 0, msgs_24h: tc.count ?? 0,
           last_at: lm?.created_at ?? null, last_from: lm ? (lm.author_name ?? lm.source ?? "?") : null,
+          role: ownedIds.has(gid) ? "owner" : "viewer",
         });
       }
       return json({ ok: true, rooms });
     }
 
-    // ---- Web owner path: authenticated by a Supabase JWT + group_id, scoped to groups you own ----
+    // ---- Web path: a Supabase JWT + group_id. The owner gets everything; a
+    // viewer (someone who added the room from its invite link) gets reads only. ----
     if (bearer.startsWith("eyJ") && body.group_id) {
       const { data: u } = await admin.auth.getUser(bearer);
       const uid = u?.user?.id;
       if (!uid) return json({ ok: false, error: "Not authenticated." }, 401);
       const gid = String(body.group_id);
       const { data: g } = await admin.from("agent_groups").select("id,name,owner_user").eq("id", gid).maybeSingle();
-      if (!g || g.owner_user !== uid) return json({ ok: false, error: "Not your group." }, 403);
+      const isOwner = !!g && g.owner_user === uid;
+      let isViewer = false;
+      if (g && !isOwner) {
+        const { data: v } = await admin.from("agent_group_viewers")
+          .select("group_id").eq("group_id", gid).eq("user_id", uid).maybeSingle();
+        isViewer = !!v;
+      }
+      if (!g || (!isOwner && !isViewer)) return json({ ok: false, error: "Not your group." }, 403);
       const group = String(g.name);
 
       if (action === "timeline" || action === "read") {
@@ -286,6 +304,9 @@ Deno.serve(async (req: Request) => {
         return json({ ok: true, group, count: asc.length, has_more: desc.length === limit, next_before: desc.length ? desc[desc.length - 1].created_at : null, messages: await shape(admin, asc, "") });
       }
       if (action === "note") {
+        // Watching a room is read-only: writing into someone else's room needs
+        // an agent in it, not just a copy of the link.
+        if (!isOwner) return json({ ok: false, error: "You are watching this room — read only." }, 403);
         const text = String(body.text ?? body.content ?? "").trim();
         if (!text) return json({ ok: false, error: "Nothing to add." });
         if (text.length > 100000) return json({ ok: false, error: "Too long (max 100000)." });

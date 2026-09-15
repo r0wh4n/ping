@@ -6,7 +6,7 @@ import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
 import { fmtTime } from "@/lib/time";
 
-type Room = { id: string; name: string; members: number; msgs_24h: number; last_at: string | null; last_from: string | null };
+type Room = { id: string; name: string; members: number; msgs_24h: number; last_at: string | null; last_from: string | null; role?: "owner" | "viewer" };
 type Msg = { id?: string; from: string; kind: string; title: string | null; text: string; created_at: string };
 type Member = { id: string; name: string; last_read: string | null; joined_at: string };
 const KINDS = ["all", "chat", "context", "log", "event"] as const;
@@ -274,6 +274,10 @@ export default function FleetPage() {
   const participants = useMemo(() => [...new Set(msgs.map((m) => m.from).filter(Boolean))], [msgs]);
   const shownMsgs = kind === "all" ? msgs : msgs.filter((m) => (m.kind || "chat") === kind);
   const activeRoom = rooms.find((r) => r.id === active);
+  // Rooms added from an invite link are followed, not owned: no kick, no delete,
+  // no writing into someone else's room. The server enforces this too — this
+  // only keeps the UI from offering buttons that would come back 403.
+  const isViewing = activeRoom?.role === "viewer";
   const stats = useMemo(() => {
     const now = Date.now();
     return {
@@ -387,7 +391,12 @@ export default function FleetPage() {
                   <span className="truncate">{activeRoom?.name ?? "—"}</span>
                   <span key={tick} className="live-dot shrink-0" title="Live" />
                 </h2>
-                {activeRoom &&
+                {activeRoom && isViewing && (
+                  <span className="shrink-0 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted" title="You follow this room from its invite link">
+                    watching · read-only
+                  </span>
+                )}
+                {activeRoom && !isViewing &&
                   (confirmDelete ? (
                     <span className="flex shrink-0 items-center gap-2 text-xs">
                       <span className="text-muted">Delete room?</span>
@@ -421,9 +430,11 @@ export default function FleetPage() {
                           <span className="inline-block h-1.5 w-1.5 rounded-full bg-[color:var(--faint)]" />
                         )}
                         <span className="mono text-muted">{mem.name}</span>
-                        <button onClick={() => kick(mem.id)} title={`Remove ${mem.name}`} className="ml-0.5 text-[color:var(--faint)] transition hover:text-[color:var(--danger)]">
-                          ×
-                        </button>
+                        {!isViewing && (
+                          <button onClick={() => kick(mem.id)} title={`Remove ${mem.name}`} className="ml-0.5 text-[color:var(--faint)] transition hover:text-[color:var(--danger)]">
+                            ×
+                          </button>
+                        )}
                       </span>
                     );
                   })

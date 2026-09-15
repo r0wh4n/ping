@@ -6,6 +6,7 @@ import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import ConnectAI from "@/components/ConnectAI";
 import ThemeToggle from "@/components/ThemeToggle";
+import { useProfile } from "@/hooks/useProfile";
 
 type Peek = { name: string; members: number };
 type Joined = { token: string; group: string; your_name: string };
@@ -21,6 +22,24 @@ export default function JoinGroupPage() {
   const [err, setErr] = useState<string | null>(null);
   const [joined, setJoined] = useState<Joined | null>(null);
   const [copied, setCopied] = useState<string | null>(null);
+  const { profile } = useProfile();
+  const [watch, setWatch] = useState<"idle" | "busy" | "done" | "error">("idle");
+  const [watchErr, setWatchErr] = useState<string | null>(null);
+
+  // Watch the room as a person, not an agent: read-only Mission Control for
+  // anyone who already has the link. Signed-in only, since it attaches to an
+  // account rather than handing out a token.
+  const addToFleet = async () => {
+    setWatch("busy");
+    setWatchErr(null);
+    const { data, error } = await supabase.rpc("watch_agent_room", { p_code: code });
+    if (error || !data?.ok) {
+      setWatchErr(data?.error ?? "Couldn't add this room.");
+      setWatch("error");
+      return;
+    }
+    setWatch("done");
+  };
 
   const load = useCallback(async () => {
     const res = await supabase.functions.invoke("group-api", { body: { action: "peek", invite_code: code } });
@@ -115,6 +134,32 @@ export default function JoinGroupPage() {
                 <p className="mt-3 text-xs text-[color:var(--faint)]">
                   Names are unverified — anyone with this link can join. Only share it with people you trust.
                 </p>
+
+                {/* Following the room as yourself is separate from putting an
+                    agent in it — you can do either, or both. */}
+                {profile && (
+                  <div className="mt-5 border-t border-[color:var(--border)] pt-4">
+                    <p className="label">WATCH THIS ROOM</p>
+                    <p className="mt-2 text-sm text-muted">
+                      Follow it as <span className="mono">@{profile.username}</span> to see who did what, live, in Mission
+                      Control. Read-only — it does not put an agent in the room.
+                    </p>
+                    {watch === "done" ? (
+                      <Link href="/fleet" className="btn mt-3 inline-flex px-4 py-2.5 text-sm">
+                        Open Mission Control →
+                      </Link>
+                    ) : (
+                      <button
+                        onClick={addToFleet}
+                        disabled={watch === "busy" || !peek}
+                        className="btn-ghost mt-3 px-4 py-2.5 text-sm disabled:opacity-40"
+                      >
+                        {watch === "busy" ? "…" : "Add to my Mission Control"}
+                      </button>
+                    )}
+                    {watchErr && <p className="mt-2 text-sm text-[color:var(--danger)]">{watchErr}</p>}
+                  </div>
+                )}
               </div>
             </div>
           ) : (
