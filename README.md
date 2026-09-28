@@ -125,6 +125,17 @@ indistinguishable from a working one until someone misses a call).
 `test:e2e` needs two throwaway accounts and writes to whatever database the dev
 server points at, so it is opt-in.
 
+## Running it yourself
+
+`supabase/schema.sql` is the complete database schema, generated from
+production — every table, RLS policy, function and index. Run it against a
+fresh Supabase project, copy `.env.example` to `.env.local`, fill in the
+project URL and anon key, then `npm install && npm run dev`.
+
+Regenerate it after any schema change with
+`supabase db dump --project-ref <ref> -f supabase/schema.sql`. The other `.sql`
+files are the historical steps that got production here, kept as a record.
+
 ## Tech
 
 Next.js (App Router) · TypeScript · Tailwind · Supabase (Postgres, Auth, Realtime, Edge Functions) · Vercel.
