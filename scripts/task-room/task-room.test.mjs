@@ -4,12 +4,16 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "node:http";
 import { test } from "node:test";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
+import * as core from "./room.mjs";
+import * as adapters from "./agents.mjs";
+import * as remote from "./ping.mjs";
+import * as cli from "../ping-task.mjs";
 
-// Keep the missing-feature failure inside an executed test for the RED gate.
-const core = await import("./room.mjs").catch(() => ({}));
-const adapters = await import("./agents.mjs").catch(() => ({}));
-const remote = await import("./ping.mjs").catch(() => ({}));
-const cli = await import("../ping-task.mjs").catch(() => ({}));
+const execFileAsync = promisify(execFile);
+const cliFile = fileURLToPath(new URL("../ping-task.mjs", import.meta.url));
 
 async function workspace(t) {
   const dir = await mkdtemp(join(tmpdir(), "ping-task-test-"));
@@ -195,4 +199,118 @@ test("remote endpoints require HTTPS except loopback and reject embedded credent
   for (const endpoint of ["http://example.com/mcp", "file:///tmp/x", "https://user:password@example.com/mcp"]) {
     assert.throws(() => new remote.PingRoom({ link: "gk_test", endpoint }));
   }
+  assert.throws(() => new remote.PingRoom({ link: "invalid", endpoint: "https://example.com/mcp" }), /invite/);
+});
+
+test("CLI runs the complete task from a config file and preserves exit statuses", async (t) => {
+  const { dir, agents } = await fixture(t, { commandcode: "fail" });
+  const config = join(dir, "config.json");
+  await writeFile(config, JSON.stringify({ agents: Object.fromEntries(agents.map(({ id, ...agent }) => [id, agent])) }));
+  const args = [cliFile, "--task", "CLI integration", "--cwd", dir, "--config", config, "--rounds", "1", "--out", join(dir, "room")];
+  await assert.rejects(execFileAsync(process.execPath, args), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stdout, /partial: 3 replies, 1 failed turns/);
+    return true;
+  });
+  const events = (await readFile(join(dir, "room", "events.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
+  assert.equal(events.at(-1).status, "partial");
+  const success = await execFileAsync(process.execPath, [...args.slice(0, -2), "--agents", "codex,claude", "--out", join(dir, "success")]);
+  assert.match(success.stdout, /finished: 2 replies, 0 failed turns/);
+});
+
+test("CLI previews safely and rejects invalid configuration before writing a journal", async (t) => {
+  const dir = await workspace(t);
+  const config = join(dir, "config.json");
+  const logs = [];
+  t.mock.method(console, "log", (...args) => logs.push(args.join(" ")));
+  await writeFile(config, JSON.stringify({ agents: { codex: { model: "local-model", role: "custom role" } } }));
+  assert.equal(await cli.main(["--task", "preview", "--cwd", dir, "--agents", "codex", "--config", config, "--dry-run", "--out", join(dir, "room")]), 0);
+  assert.match(logs.join(""), /custom role/);
+  await assert.rejects(stat(join(dir, "room")));
+  for (const invalid of [[], { agents: [] }, { agents: null }, { agents: { typo: {} } }, { agents: { codex: { args: "--yolo" } } }, { agents: { codex: { model: "" } } }]) {
+    await writeFile(config, JSON.stringify(invalid));
+    await assert.rejects(cli.main(["--task", "preview", "--cwd", dir, "--config", config]), /config/i);
+  }
+  await assert.rejects(cli.main(["--task", "x", "--cwd", config]), /directory/);
+});
+
+test("local transcripts are never overwritten and interrupted runs are marked cancelled", async (t) => {
+  const { dir, agents } = await fixture(t);
+  const controller = new AbortController();
+  controller.abort();
+  const options = { task: "cancel before start", cwd: dir, agents, outputDir: join(dir, "room"), signal: controller.signal };
+  const result = await core.runRoom(options);
+  assert.equal(result.status, "cancelled");
+  assert.equal(result.replies, 0);
+  await assert.rejects(core.runRoom(options), /EEXIST/);
+});
+
+test("room read, publish and cleanup failures are explicit and keep local replies", async (t) => {
+  const { dir, agents } = await fixture(t);
+  const bridge = {
+    async open() {},
+    async read() { throw new Error("read failed gm_private_token"); },
+    async say() { if (this.started) throw new Error("publish failed"); this.started = true; },
+    async close() { throw new Error("cleanup failed"); },
+  };
+  const result = await core.runRoom({ task: "check", cwd: dir, agents: agents.slice(0, 1), rounds: 1, timeoutMs: 5000, outputDir: join(dir, "room"), bridge });
+  assert.equal(result.status, "partial");
+  assert.equal(result.replies, 1);
+  assert.equal(result.integrationFailures, 3);
+  const journal = await readFile(result.transcript, "utf8");
+  assert.ok(!journal.includes("gm_private_token"));
+  assert.match(journal, /\[redacted Ping credential\]/);
+});
+
+test("a room join failure prevents any task publication or agent launch", async (t) => {
+  const { dir, agents } = await fixture(t);
+  let closed = false;
+  const bridge = {
+    async open() { throw new Error("invalid invite"); },
+    async say() { assert.fail("must not publish before joining"); },
+    async close() { closed = true; },
+  };
+  const result = await core.runRoom({ task: "private task", cwd: dir, agents, outputDir: join(dir, "room"), bridge });
+  assert.equal(result.status, "partial");
+  assert.equal(result.replies, 0);
+  assert.equal(closed, true);
+  await assert.rejects(stat(join(dir, "calls.jsonl")));
+});
+
+test("MCP errors, mismatched rooms and JSON replies are handled without credential leakage", async (t) => {
+  let mode = "http";
+  let joins = 0;
+  const server = createServer(async (req, res) => {
+    let body = "";
+    for await (const chunk of req) body += chunk;
+    const rpc = JSON.parse(body);
+    if (mode === "http") { res.writeHead(503).end(); return; }
+    let data = { ok: true };
+    if (mode === "rpc") { res.end(JSON.stringify({ id: rpc.id, error: { code: -32000 } })); return; }
+    if (mode === "tool") data = { ok: false, error: "invalid gm_private_member" };
+    if (mode === "join") data = { ok: true, token: "invalid" };
+    if (["mismatch", "json"].includes(mode) && rpc.params.name === "ping_join") data = { ok: true, token: `gm_member_${++joins}`, group_id: mode === "mismatch" ? joins : "same" };
+    if (rpc.params.name === "ping_history") data = { ok: true, messages: [] };
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { content: [{ type: "text", text: JSON.stringify(data) }] } }));
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => new Promise((resolve) => server.close(resolve)));
+  const options = { link: "gk_test", endpoint: `http://127.0.0.1:${server.address().port}/mcp` };
+  for (const errorMode of ["http", "rpc", "tool", "join", "mismatch"]) {
+    mode = errorMode;
+    const bridge = new remote.PingRoom(options);
+    await assert.rejects(bridge.open([{ id: "codex" }, { id: "claude" }]), (error) => {
+      assert.ok(!error.message.includes("gm_private_member"));
+      return true;
+    });
+    mode = "json";
+    await bridge.close();
+  }
+  const bridge = new remote.PingRoom(options);
+  await bridge.open([{ id: "codex" }]);
+  assert.deepEqual(await bridge.read(), []);
+  await bridge.say("codex", "x".repeat(9000));
+  mode = "http";
+  await assert.rejects(bridge.close(), /memberships/);
 });
