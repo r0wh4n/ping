@@ -134,9 +134,15 @@ test("aborting a running task stops the process and prevents later turns", async
   assert.equal(typeof core.runRoom, "function", "missing task room coordinator");
   const { dir, agents } = await fixture(t, { claude: "hang" });
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 200);
-  t.after(() => clearTimeout(timer));
-  const result = await core.runRoom({ task: "cancel", cwd: dir, agents, rounds: 2, timeoutMs: 5000, outputDir: join(dir, "room"), signal: controller.signal });
+  t.after(() => controller.abort());
+  const pending = core.runRoom({ task: "cancel", cwd: dir, agents, rounds: 2, timeoutMs: 5000, outputDir: join(dir, "room"), signal: controller.signal });
+  // Wait for the subprocess to start, rather than racing Node's startup time.
+  for (let i = 0; i < 100; i++) {
+    if (await stat(join(dir, "calls.jsonl")).catch(() => false)) break;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  controller.abort();
+  const result = await pending;
   assert.equal(result.status, "cancelled");
   const calls = (await readFile(join(dir, "calls.jsonl"), "utf8")).trim().split("\n").map(JSON.parse);
   assert.deepEqual(calls.map((c) => c.id), ["claude"]);
