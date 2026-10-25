@@ -177,12 +177,38 @@ const windowSince = (period: string) => {
 // ---- Rate limiting (DB-backed via rl_hit; fail-open if the RPC errors) ----
 const clientIp = (req: Request) =>
   (req.headers.get("x-forwarded-for") ?? "").split(",")[0].trim() || "unknown";
-const RL = { create: [10, 3600], join: [20, 3600], post: [60, 60], wait: [40, 60], read: [240, 60], synth: [20, 60] } as const;
+const RL = { create: [10, 3600], join: [120, 3600], post: [60, 60], wait: [40, 60], read: [240, 60], synth: [20, 60] } as const;
 async function limited(admin: Admin, bucket: string, spec: readonly [number, number]): Promise<boolean> {
   const { data } = await admin.rpc("rl_hit", { p_bucket: bucket, p_limit: spec[0], p_window_secs: spec[1] });
   return data === false; // true => over the limit
 }
-const rlError = (what: string) => json({ ok: false, error: `Rate limit — too many ${what}. Wait a bit and retry.` }, 429);
+const rlError = (what: string, retryAfter = 60) =>
+  new Response(
+    JSON.stringify({ ok: false, error: `Rate limit — too many ${what}. Retry in about ${retryAfter}s.`, retry_after: retryAfter }),
+    { status: 429, headers: { ...cors, "Content-Type": "application/json", "Retry-After": String(retryAfter) } }
+  );
+
+/**
+ * Read a limiter bucket WITHOUT consuming from it.
+ *
+ * rl_hit increments before it checks, so every rejected request also spent
+ * budget. A client doing textbook exponential backoff therefore dug itself
+ * deeper with each retry: in a 20-agent test, three agents burned 50+ attempts
+ * between them and locked out everyone behind that IP — including clients that
+ * had never called the API — for the rest of the hour. Charge only for work
+ * actually done; see rateSpend below.
+ */
+async function rateCheck(admin: Admin, bucket: string, limit: number) {
+  const { data } = await admin.from("rate_limits").select("count,reset_at").eq("bucket", bucket).maybeSingle();
+  if (!data) return { over: false, retryAfter: 0 };
+  const resetsIn = Math.ceil((Date.parse(String(data.reset_at)) - Date.now()) / 1000);
+  if (resetsIn <= 0) return { over: false, retryAfter: 0 }; // window already rolled
+  return { over: Number(data.count ?? 0) >= limit, retryAfter: Math.max(1, resetsIn) };
+}
+
+/** Charge the bucket. Called only after the thing being limited actually happened. */
+const rateSpend = (admin: Admin, bucket: string, spec: readonly [number, number]) =>
+  admin.rpc("rl_hit", { p_bucket: bucket, p_limit: spec[0], p_window_secs: spec[1] });
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -241,7 +267,9 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "join") {
-      if (await limited(admin, "join:" + ip, RL.join)) return rlError("join attempts");
+      // Resolve the room BEFORE touching the limiter: a mistyped link should cost
+      // nobody any budget, and the bucket is keyed per room so one busy project
+      // cannot lock a colleague out of an unrelated client's room.
       const code = inviteFrom(body.invite_code ?? body.link);
       const name = cleanName(body.name);
       if (!name) return json({ ok: false, error: "Pick a name to join with." });
@@ -250,10 +278,16 @@ Deno.serve(async (req: Request) => {
       if (!g) return json({ ok: false, error: "No room matches that link. It may have been deleted, or the link may be cut short - copy it again, or ask whoever shared it for a fresh one." }, 404);
       const closed = inviteClosed(g);
       if (closed) return json({ ok: false, error: closed });
+
+      const joinBucket = `join:${g.id}:${ip}`;
+      const gate = await rateCheck(admin, joinBucket, RL.join[0]);
+      if (gate.over) return rlError("join attempts for this room", gate.retryAfter);
+
       const token = newMemberToken();
       const { data: m, error } = await admin
         .from("agent_group_members").insert({ group_id: g.id, token, name }).select("id").single();
       if (error) return json({ ok: false, error: error.message });
+      await rateSpend(admin, joinBucket, RL.join); // charge only a join that happened
       return json({
         ok: true, group_id: g.id, group: g.name, your_name: name, member_id: m.id, token,
         next_step: `Joined \"${g.name}\" as \"${name}\". Set ${token} as your MCP bearer token, then use ping_say / ping_wait / ping_read / ping_share / ping_log.`,
