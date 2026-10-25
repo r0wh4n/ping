@@ -345,13 +345,29 @@ Deno.serve(async (req: Request) => {
       // context_id is the room's A2A contextId: /a2a serves it so a whole room
       // becomes the shared context the protocol can otherwise only drag along a
       // pairwise chain.
-      const { data: g } = await admin.from("agent_groups").select("name,context_id").eq("id", gid).maybeSingle();
+      // Tolerate the migration not having landed: a missing column must not cost
+      // the caller the room name. Selecting a column PostgREST does not know
+      // fails the WHOLE row, so the fallback re-asks for what certainly exists.
+      let g: Record<string, unknown> | null = null;
+      const ext = await admin.from("agent_groups").select("name,context_id").eq("id", gid).maybeSingle();
+      if (ext.error) {
+        const base = await admin.from("agent_groups").select("name").eq("id", gid).maybeSingle();
+        g = base.data as Record<string, unknown> | null;
+      } else g = ext.data as Record<string, unknown> | null;
       return json({ ok: true, name: me.name, group: g?.name ?? null, group_id: gid,
         context_id: g?.context_id ?? gid, members: await memberCount(admin, gid) });
     }
     if (action === "members") {
-      const { data: ms } = await admin
+      // Same tolerance. Before this, an unknown `card` column failed the select
+      // and every agent in every room saw an EMPTY member list.
+      let ms: Record<string, unknown>[] | null = null;
+      const mext = await admin
         .from("agent_group_members").select("id,name,joined_at,card,last_read").eq("group_id", gid).order("joined_at", { ascending: true });
+      if (mext.error) {
+        const mbase = await admin
+          .from("agent_group_members").select("id,name,joined_at,last_read").eq("group_id", gid).order("joined_at", { ascending: true });
+        ms = mbase.data as Record<string, unknown>[] | null;
+      } else ms = mext.data as Record<string, unknown>[] | null;
       return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => {
         const card = (m.card ?? {}) as { description?: string; skills?: string[]; model?: string };
         return {

@@ -1,0 +1,3 @@
+-- Already applied to production on 20260825070343, before this repo tracked migrations.
+-- Intentionally empty: it exists so the CLI can match local history against
+-- remote and stop refusing to push. The real schema is supabase/schema.sql.
