@@ -67,6 +67,35 @@ async function memberCount(admin: Admin, gid: string): Promise<number> {
     .from("agent_group_members").select("id", { count: "exact", head: true }).eq("group_id", gid);
   return count ?? 0;
 }
+/**
+ * Open work this member could actually take.
+ *
+ * A live run had the only migrations-capable agent poll the submitted queue 36
+ * times across seven minutes and never once see a task — offers were claimed
+ * within eleven seconds, so whoever happened to poll at the right instant won.
+ * A job board where the qualified agent has to win a race is not a job board,
+ * so every wait/read now carries the work that matches the caller's card.
+ * Untagged tasks match everyone; an agent already at its limit is told nothing,
+ * since it cannot act on it anyway.
+ */
+async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknown) {
+  const mine = (((card ?? {}) as { skills?: string[] }).skills ?? []).map((x) => String(x).toLowerCase());
+  const { count: held } = await admin.from("agent_tasks")
+    .select("id", { count: "exact", head: true })
+    .eq("group_id", gid).eq("assignee", meId).in("state", ["working", "input-required"]);
+  if ((held ?? 0) >= 3) return [];
+  const { data } = await admin.from("agent_tasks")
+    .select("id,title,skills,created_at").eq("group_id", gid).eq("state", "submitted")
+    .order("created_at", { ascending: true }).limit(10);
+  return (data ?? [])
+    .filter((t) => {
+      const need = ((t.skills ?? []) as string[]).map((x) => String(x).toLowerCase());
+      return need.length === 0 || need.some((n) => mine.includes(n));
+    })
+    .slice(0, 5)
+    .map((t) => ({ task_id: t.id, title: t.title, skills: t.skills }));
+}
+
 // deno-lint-ignore no-explicit-any
 async function shape(admin: Admin, rows: any[], meId: string) {
   const ids = [...new Set(rows.map((m) => m.member_id).filter(Boolean))];
@@ -654,7 +683,9 @@ Deno.serve(async (req: Request) => {
         const cursor = msgs.length ? msgs[msgs.length - 1].created_at : new Date().toISOString();
         await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
       }
-      return json({ ok: true, group: await groupName(admin, gid), count: msgs.length, messages: await shape(admin, msgs, meId) });
+      const work = await openWorkFor(admin, gid, meId, me.card);
+      return json({ ok: true, group: await groupName(admin, gid), count: msgs.length, messages: await shape(admin, msgs, meId),
+        ...(work.length ? { open_tasks: work, work_note: "Open work matching your card. Take one with ping_claim." } : {}) });
     }
     if (action === "history") {
       // Page BACKWARD through the timeline (older than `before`). Read-only —
@@ -726,7 +757,9 @@ Deno.serve(async (req: Request) => {
             // test agents sat in one room for nine minutes each believing the
             // other had never spoken. Re-delivering until an explicit read is the
             // safe direction to fail in.
+            const work = await openWorkFor(admin, gid, meId, me.card);
             return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId),
+              ...(work.length ? { open_tasks: work, work_note: "Open work matching your card. Take one with ping_claim." } : {}),
               note: "Call ping_read to mark these read — until you do, ping_wait will keep showing them." });
           }
           // Batch was all our OWN messages — advance past them so we never re-scan
@@ -735,8 +768,12 @@ Deno.serve(async (req: Request) => {
           await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
           continue;
         }
-        if (Date.now() - startedAt >= maxMs)
-          return json({ ok: true, count: 0, timed_out: true, note: "No reply yet — call ping_wait again to keep waiting." });
+        if (Date.now() - startedAt >= maxMs) {
+          const work = await openWorkFor(admin, gid, meId, me.card);
+          return json({ ok: true, count: 0, timed_out: true,
+            ...(work.length ? { open_tasks: work, work_note: "Nobody spoke, but there is open work matching your card. Take one with ping_claim." } : {}),
+            note: "No reply yet — call ping_wait again to keep waiting." });
+        }
         await sleep(1200);
       }
     }
