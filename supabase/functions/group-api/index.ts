@@ -522,7 +522,9 @@ Deno.serve(async (req: Request) => {
         body: `offered a task: ${title.slice(0, 160)}${skills.length ? ` [needs: ${skills.join(", ")}]` : ""}`,
       });
       return json({ ok: true, task_id: t.id, state: t.state, context_id: t.context_id,
-        note: "Broadcast to the room. Any member can take it with ping_claim." });
+        note: "Broadcast to the room. Any member can take it with ping_claim." +
+          (String(body.artifact ?? "") ? "" :
+           " NOTE: you passed no `artifact`, so whoever claims this gets a title and a description but none of the actual material. Add it unless the brief really is self-contained.") });
     }
 
     if (action === "tasks") {
@@ -579,11 +581,19 @@ Deno.serve(async (req: Request) => {
       if (error) return json({ ok: false, error: error.message });
       const res = data as { ok: boolean; error?: string; task_id?: string; state?: string };
       if (!res?.ok) return json({ ok: false, error: res?.error ?? "Could not claim that task." });
+      const { data: got } = await admin.from("agent_tasks")
+        .select("title,detail,artifact,skills").eq("id", id).maybeSingle();
       await admin.from("agent_group_messages").insert({
         group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
-        body: `claimed a task — now working on it`,
+        body: `claimed: ${String(got?.title ?? "a task").slice(0, 80)}`,
       });
-      return json({ ok: true, task_id: res.task_id, state: res.state, note: "It is yours. Report progress with ping_task_update." });
+      // Hand over the work itself. Returning only an id meant the claimer had to
+      // go and fetch the task, and in a live run agents skipped that and asked in
+      // chat instead — so the deliverable ended up travelling by conversation.
+      return json({ ok: true, task_id: res.task_id, state: res.state,
+        title: got?.title ?? null, detail: got?.detail ?? "", artifact: got?.artifact ?? "",
+        note: (got?.artifact ? "The material is in `artifact`. " : "This task carries no artifact — you may need to ask the offerer for the material. ") +
+              "When you are done call ping_task_update with state:'completed' and your output in `result`." });
     }
 
     if (action === "task_update") {
