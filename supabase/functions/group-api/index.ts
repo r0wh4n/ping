@@ -55,7 +55,7 @@ const inviteClosed = (g: InviteState): string | null =>
 
 async function memberFromToken(admin: Admin, token: string) {
   const { data } = await admin
-    .from("agent_group_members").select("id, group_id, name, last_read").eq("token", token).maybeSingle();
+    .from("agent_group_members").select("id, group_id, name, last_read, card").eq("token", token).maybeSingle();
   return data;
 }
 async function groupName(admin: Admin, gid: string): Promise<string | null> {
@@ -340,6 +340,11 @@ Deno.serve(async (req: Request) => {
     if (!me) return json({ ok: false, error: "Invalid or expired member token. Re-join with your group link." }, 401);
     const gid = String(me.group_id);
     const meId = String(me.id);
+    // Liveness, recorded on every authenticated call. Deliberately not awaited:
+    // "when was this agent last doing something" is worth a background write,
+    // not latency on every request. Tolerates the column not existing yet.
+    void admin.from("agent_group_members").update({ last_active: new Date().toISOString() })
+      .eq("id", meId).then(() => {}, () => {});
 
     if (action === "whoami") {
       // context_id is the room's A2A contextId: /a2a serves it so a whole room
@@ -362,7 +367,7 @@ Deno.serve(async (req: Request) => {
       // and every agent in every room saw an EMPTY member list.
       let ms: Record<string, unknown>[] | null = null;
       const mext = await admin
-        .from("agent_group_members").select("id,name,joined_at,card,last_read").eq("group_id", gid).order("joined_at", { ascending: true });
+        .from("agent_group_members").select("id,name,joined_at,card,last_read,last_active").eq("group_id", gid).order("joined_at", { ascending: true });
       if (mext.error) {
         const mbase = await admin
           .from("agent_group_members").select("id,name,joined_at,last_read").eq("group_id", gid).order("joined_at", { ascending: true });
@@ -377,9 +382,13 @@ Deno.serve(async (req: Request) => {
           description: card.description || null,
           skills: card.skills ?? [],
           model: card.model ?? null,
-          // Liveness: both test agents independently asked for this. Without it a
-          // waiting agent cannot tell "still thinking" from "never started".
-          last_seen: m.last_read ?? null,
+          // When this member last did anything. Previously this reported
+          // last_read, so an agent that talked but never read looked dead —
+          // exactly backwards for the "is it thinking or gone?" question.
+          last_active: m.last_active ?? null,
+          // The message cursor, kept separate because it answers a different
+          // question: how far through the room this member has caught up.
+          last_read: m.last_read ?? null,
         };
       }) });
     }
@@ -504,6 +513,29 @@ Deno.serve(async (req: Request) => {
     if (action === "task_claim") {
       const id = String(body.task_id ?? "");
       if (!id) return json({ ok: false, error: "Pass the task_id you want to claim." });
+      // Skills are self-declared, so this is a speed bump rather than a gate: an
+      // agent may genuinely do something it did not list. But a live test had one
+      // agent take BOTH tasks — including one needing a skill it had not claimed —
+      // while the only qualified agent sat idle. Silently allowing that makes
+      // capability cards decorative.
+      const { data: want } = await admin.from("agent_tasks").select("skills,title").eq("id", id).eq("group_id", gid).maybeSingle();
+      const force = body.force === true;
+      if (want && !force) {
+        const need = (want.skills ?? []) as string[];
+        const mine = (((me.card ?? {}) as { skills?: string[] }).skills ?? []).map((x) => x.toLowerCase());
+        if (need.length && !need.some((n) => mine.includes(String(n).toLowerCase())))
+          return json({ ok: false, error:
+            `That task needs [${need.join(", ")}] and your card lists [${mine.join(", ") || "nothing"}]. ` +
+            `Leave it for an agent that can do it, or pass force:true if you genuinely can and your card is just out of date.` });
+        // One agent draining the board starves everyone else, so cap what a
+        // single member can hold open at once.
+        const { count } = await admin.from("agent_tasks")
+          .select("id", { count: "exact", head: true })
+          .eq("group_id", gid).eq("assignee", meId).in("state", ["working", "input-required"]);
+        if ((count ?? 0) >= 3)
+          return json({ ok: false, error:
+            `You are already holding ${count} open tasks. Finish or release one with ping_task_update before taking more.` });
+      }
       const { data, error } = await admin.rpc("claim_agent_task", { p_task: id, p_member: meId });
       if (error) return json({ ok: false, error: error.message });
       const res = data as { ok: boolean; error?: string; task_id?: string; state?: string };
@@ -518,7 +550,10 @@ Deno.serve(async (req: Request) => {
     if (action === "task_update") {
       const id = String(body.task_id ?? "");
       const next = String(body.state ?? "");
-      const ALLOWED = ["working", "input-required", "completed", "failed", "canceled"];
+      // `submitted` is a release: it hands the task back to the room. Without it
+      // a mis-claim was permanent — the only escape was the requester posting a
+      // duplicate, which a live agent hit within minutes of this shipping.
+      const ALLOWED = ["submitted", "working", "input-required", "completed", "failed", "canceled"];
       if (!id) return json({ ok: false, error: "Pass the task_id." });
       if (!ALLOWED.includes(next))
         return json({ ok: false, error: `state must be one of: ${ALLOWED.join(", ")}.` });
@@ -528,6 +563,9 @@ Deno.serve(async (req: Request) => {
       if (String(t.assignee ?? "") !== meId && String(t.created_by ?? "") !== meId)
         return json({ ok: false, error: "That task belongs to another member. Only its assignee or the member who offered it can change its state." });
       const patch: Record<string, unknown> = { state: next, updated_at: new Date().toISOString() };
+      // Releasing clears the assignee, so the task is genuinely open again
+      // rather than sitting unclaimed-but-owned.
+      if (next === "submitted") patch.assignee = null;
       if (body.result !== undefined) patch.result = String(body.result).slice(0, 20000);
       const { error } = await admin.from("agent_tasks").update(patch).eq("id", id);
       if (error) return json({ ok: false, error: error.message });
