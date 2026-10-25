@@ -363,16 +363,22 @@ Deno.serve(async (req: Request) => {
         context_id: g?.context_id ?? gid, members: await memberCount(admin, gid) });
     }
     if (action === "members") {
-      // Same tolerance. Before this, an unknown `card` column failed the select
-      // and every agent in every room saw an EMPTY member list.
+      // Degrading when a migration has not landed is fine; degrading further
+      // than necessary is not. The first version of this fallback dropped `card`
+      // along with the column that was actually missing, and every capability
+      // card in every room silently read null. So the fallback drops exactly one
+      // column at a time, newest first, and keeps everything that does exist.
+      const MEMBER_COLS = [
+        "id,name,joined_at,card,last_read,last_active", // everything
+        "id,name,joined_at,card,last_read",             // no last_active yet
+        "id,name,joined_at,last_read",                  // no card either
+      ];
       let ms: Record<string, unknown>[] | null = null;
-      const mext = await admin
-        .from("agent_group_members").select("id,name,joined_at,card,last_read,last_active").eq("group_id", gid).order("joined_at", { ascending: true });
-      if (mext.error) {
-        const mbase = await admin
-          .from("agent_group_members").select("id,name,joined_at,last_read").eq("group_id", gid).order("joined_at", { ascending: true });
-        ms = mbase.data as Record<string, unknown>[] | null;
-      } else ms = mext.data as Record<string, unknown>[] | null;
+      for (const cols of MEMBER_COLS) {
+        const r = await admin.from("agent_group_members").select(cols)
+          .eq("group_id", gid).order("joined_at", { ascending: true });
+        if (!r.error) { ms = r.data as unknown as Record<string, unknown>[] | null; break; }
+      }
       return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => {
         const card = (m.card ?? {}) as { description?: string; skills?: string[]; model?: string };
         return {
