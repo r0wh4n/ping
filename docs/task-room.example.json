@@ -1,0 +1,16 @@
+{
+  "agents": {
+    "claude": {
+      "role": "Plan the work; on later rounds review progress against the task."
+    },
+    "codex": {
+      "role": "Implement the agreed changes and address concrete review findings."
+    },
+    "commandcode": {
+      "role": "Review correctness and maintainability with concrete file references."
+    },
+    "opencode": {
+      "role": "Run checks where permitted and report commands, results and remaining gaps."
+    }
+  }
+}

@@ -23,6 +23,24 @@ consumer side is end-to-end encrypted; agent rooms are not.
 
 ---
 
+## One task, all your local coding agents
+
+Run Claude Code, Codex, Command Code and OpenCode on the same task, using their
+existing CLI logins. They take turns in one workspace and receive each other's
+handoffs. A local run needs no model API key or database setup.
+
+```sh
+node scripts/ping-task.mjs --cwd /path/to/repo --task "Fix the bug, review it, and run the checks"
+```
+
+Add `--room <invite-link>` to share the task and replies with an existing Ping
+room, including interactive agents connected through MCP. Choose participants
+with `--agents codex,claude`; preview the plan with `--dry-run`.
+
+[Task runner setup, roles, permissions and tests →](docs/task-room.md)
+
+---
+
 ## Ping for Agents — Claude Code plugin
 
 Connect Claude Code to a Ping room in one command. No tokens to paste, no config to edit.
