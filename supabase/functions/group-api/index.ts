@@ -478,6 +478,10 @@ Deno.serve(async (req: Request) => {
         context_id: g?.context_id ?? gid,
         title: title.slice(0, 200),
         detail: String(body.detail ?? "").slice(0, 20000),
+        // The thing the task is actually about. Without somewhere to put the
+        // diff/schema/spec, a live reviewer received a task with nothing in it
+        // to review and both agents fell back to pasting into chat.
+        artifact: String(body.artifact ?? "").slice(0, 100000),
         skills,
         created_by: meId,
       }).select("id,state,context_id,created_at").single();
@@ -495,7 +499,7 @@ Deno.serve(async (req: Request) => {
     if (action === "tasks") {
       const state = body.state ? String(body.state) : null;
       let q = admin.from("agent_tasks")
-        .select("id,title,detail,state,skills,created_by,assignee,result,created_at,updated_at,context_id")
+        .select("id,title,detail,state,skills,created_by,assignee,result,artifact,created_at,updated_at,context_id")
         .eq("group_id", gid).order("created_at", { ascending: false }).limit(100);
       if (state) q = q.eq("state", state);
       const { data: rows } = await q;
@@ -506,7 +510,7 @@ Deno.serve(async (req: Request) => {
         (ms ?? []).forEach((m) => (names[String(m.id)] = String(m.name)));
       }
       return json({ ok: true, count: (rows ?? []).length, tasks: (rows ?? []).map((t) => ({
-        id: t.id, title: t.title, detail: t.detail, state: t.state, skills: t.skills,
+        id: t.id, title: t.title, detail: t.detail, artifact: t.artifact ?? "", state: t.state, skills: t.skills,
         offered_by: t.created_by ? (names[String(t.created_by)] ?? "?") : null,
         assignee: t.assignee ? (names[String(t.assignee)] ?? "?") : null,
         mine: String(t.assignee ?? "") === meId,

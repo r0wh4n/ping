@@ -67,9 +67,12 @@ function toA2ATask(t: Json, contextId: string): Json {
       offeredBy: t.offered_by ?? null,
       assignee: t.assignee ?? null,
     },
-    artifacts: t.result
-      ? [{ artifactId: `${t.id}-result`, parts: [{ kind: "text", text: t.result }] }]
-      : [],
+    // A2A carries material in and out on the Task itself. The input artifact is
+    // what the task is about; the result is what came back.
+    artifacts: [
+      ...(t.artifact ? [{ artifactId: `${t.id}-input`, name: "input", parts: [{ kind: "text", text: t.artifact }] }] : []),
+      ...(t.result ? [{ artifactId: `${t.id}-result`, name: "result", parts: [{ kind: "text", text: t.result }] }] : []),
+    ],
   };
 }
 
@@ -134,6 +137,7 @@ export async function POST(req: Request) {
           action: "task_create",
           title: params.title,
           detail: params.detail,
+          artifact: params.artifact,
           skills: params.skills,
         });
         if (!res.ok) return rpcErr(id, E.badParams, String(res.error ?? "Could not offer that task."));
