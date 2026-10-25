@@ -342,12 +342,30 @@ Deno.serve(async (req: Request) => {
     const meId = String(me.id);
 
     if (action === "whoami") {
-      return json({ ok: true, name: me.name, group: await groupName(admin, gid), group_id: gid, members: await memberCount(admin, gid) });
+      // context_id is the room's A2A contextId: /a2a serves it so a whole room
+      // becomes the shared context the protocol can otherwise only drag along a
+      // pairwise chain.
+      const { data: g } = await admin.from("agent_groups").select("name,context_id").eq("id", gid).maybeSingle();
+      return json({ ok: true, name: me.name, group: g?.name ?? null, group_id: gid,
+        context_id: g?.context_id ?? gid, members: await memberCount(admin, gid) });
     }
     if (action === "members") {
       const { data: ms } = await admin
-        .from("agent_group_members").select("id,name,joined_at").eq("group_id", gid).order("joined_at", { ascending: true });
-      return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => ({ name: m.name, you: String(m.id) === meId })) });
+        .from("agent_group_members").select("id,name,joined_at,card,last_read").eq("group_id", gid).order("joined_at", { ascending: true });
+      return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => {
+        const card = (m.card ?? {}) as { description?: string; skills?: string[]; model?: string };
+        return {
+          name: m.name,
+          you: String(m.id) === meId,
+          // Self-declared capability card — what this agent says it can do.
+          description: card.description || null,
+          skills: card.skills ?? [],
+          model: card.model ?? null,
+          // Liveness: both test agents independently asked for this. Without it a
+          // waiting agent cannot tell "still thinking" from "never started".
+          last_seen: m.last_read ?? null,
+        };
+      }) });
     }
     // Invite control. Any member can shut the door or reopen it — these rooms are
     // peer groups with no admin role, and inventing one here would be a bigger
@@ -390,6 +408,120 @@ Deno.serve(async (req: Request) => {
           : "Anyone with this link can join. Use op:'revoke' to shut it, or op:'expiry' with days to make it age out on its own.",
       });
     }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // A2A primitives. A2A v1.0 standardises agent-to-agent delegation but is
+    // strictly point-to-point: it has no way to express a group, to broadcast
+    // that work exists, or to let an agent claim it. A room is exactly that
+    // missing shape, so these use A2A's own vocabulary — capability cards and
+    // its task lifecycle — and add the claim step the spec cannot express.
+    // ──────────────────────────────────────────────────────────────────────
+
+    // Publish what you can do. Self-declared and unverified — a card is a hint
+    // for routing work, never an authorisation to do it.
+    if (action === "card") {
+      const raw = (body.card ?? body) as Record<string, unknown>;
+      const skills = Array.isArray(raw.skills)
+        ? (raw.skills as unknown[]).slice(0, 24).map((x) => cleanName(x)).filter(Boolean)
+        : [];
+      const card = {
+        description: String(raw.description ?? "").trim().slice(0, 500),
+        skills,
+        model: raw.model ? String(raw.model).slice(0, 80) : undefined,
+      };
+      const { error } = await admin.from("agent_group_members").update({ card }).eq("id", meId);
+      if (error) return json({ ok: false, error: error.message });
+      return json({ ok: true, card, note: "Teammates' agents can see this in ping_members and route work to you by skill." });
+    }
+
+    if (action === "task_create") {
+      if (await limited(admin, "post:" + meId, RL.post)) return rlError("tasks");
+      const title = String(body.title ?? "").trim();
+      if (!title) return json({ ok: false, error: "A task needs a title." });
+      const skills = Array.isArray(body.skills)
+        ? (body.skills as unknown[]).slice(0, 12).map((x) => cleanName(x)).filter(Boolean)
+        : [];
+      const { data: g } = await admin.from("agent_groups").select("context_id,name").eq("id", gid).maybeSingle();
+      const { data: t, error } = await admin.from("agent_tasks").insert({
+        group_id: gid,
+        context_id: g?.context_id ?? gid,
+        title: title.slice(0, 200),
+        detail: String(body.detail ?? "").slice(0, 20000),
+        skills,
+        created_by: meId,
+      }).select("id,state,context_id,created_at").single();
+      if (error) return json({ ok: false, error: error.message });
+      // Mirror into the timeline so humans in Mission Control and every watching
+      // agent see the offer arrive, rather than having to poll a second surface.
+      await admin.from("agent_group_messages").insert({
+        group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
+        body: `offered a task: ${title.slice(0, 160)}${skills.length ? ` [needs: ${skills.join(", ")}]` : ""}`,
+      });
+      return json({ ok: true, task_id: t.id, state: t.state, context_id: t.context_id,
+        note: "Broadcast to the room. Any member can take it with ping_claim." });
+    }
+
+    if (action === "tasks") {
+      const state = body.state ? String(body.state) : null;
+      let q = admin.from("agent_tasks")
+        .select("id,title,detail,state,skills,created_by,assignee,result,created_at,updated_at,context_id")
+        .eq("group_id", gid).order("created_at", { ascending: false }).limit(100);
+      if (state) q = q.eq("state", state);
+      const { data: rows } = await q;
+      const ids = [...new Set((rows ?? []).flatMap((t) => [t.created_by, t.assignee]).filter(Boolean))];
+      const names: Record<string, string> = {};
+      if (ids.length) {
+        const { data: ms } = await admin.from("agent_group_members").select("id,name").in("id", ids);
+        (ms ?? []).forEach((m) => (names[String(m.id)] = String(m.name)));
+      }
+      return json({ ok: true, count: (rows ?? []).length, tasks: (rows ?? []).map((t) => ({
+        id: t.id, title: t.title, detail: t.detail, state: t.state, skills: t.skills,
+        offered_by: t.created_by ? (names[String(t.created_by)] ?? "?") : null,
+        assignee: t.assignee ? (names[String(t.assignee)] ?? "?") : null,
+        mine: String(t.assignee ?? "") === meId,
+        result: t.result, context_id: t.context_id, created_at: t.created_at, updated_at: t.updated_at,
+      })) });
+    }
+
+    // The claim is one atomic UPDATE inside claim_agent_task: the loser of a race
+    // gets a refusal, never a quietly shared assignment.
+    if (action === "task_claim") {
+      const id = String(body.task_id ?? "");
+      if (!id) return json({ ok: false, error: "Pass the task_id you want to claim." });
+      const { data, error } = await admin.rpc("claim_agent_task", { p_task: id, p_member: meId });
+      if (error) return json({ ok: false, error: error.message });
+      const res = data as { ok: boolean; error?: string; task_id?: string; state?: string };
+      if (!res?.ok) return json({ ok: false, error: res?.error ?? "Could not claim that task." });
+      await admin.from("agent_group_messages").insert({
+        group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
+        body: `claimed a task — now working on it`,
+      });
+      return json({ ok: true, task_id: res.task_id, state: res.state, note: "It is yours. Report progress with ping_task_update." });
+    }
+
+    if (action === "task_update") {
+      const id = String(body.task_id ?? "");
+      const next = String(body.state ?? "");
+      const ALLOWED = ["working", "input-required", "completed", "failed", "canceled"];
+      if (!id) return json({ ok: false, error: "Pass the task_id." });
+      if (!ALLOWED.includes(next))
+        return json({ ok: false, error: `state must be one of: ${ALLOWED.join(", ")}.` });
+      const { data: t } = await admin.from("agent_tasks").select("id,assignee,created_by,state,title").eq("id", id).eq("group_id", gid).maybeSingle();
+      if (!t) return json({ ok: false, error: "No such task in this room." });
+      // Only whoever holds the task, or whoever offered it, may move it.
+      if (String(t.assignee ?? "") !== meId && String(t.created_by ?? "") !== meId)
+        return json({ ok: false, error: "That task belongs to another member. Only its assignee or the member who offered it can change its state." });
+      const patch: Record<string, unknown> = { state: next, updated_at: new Date().toISOString() };
+      if (body.result !== undefined) patch.result = String(body.result).slice(0, 20000);
+      const { error } = await admin.from("agent_tasks").update(patch).eq("id", id);
+      if (error) return json({ ok: false, error: error.message });
+      await admin.from("agent_group_messages").insert({
+        group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
+        body: `task "${String(t.title).slice(0, 80)}" → ${next}`,
+      });
+      return json({ ok: true, task_id: id, state: next });
+    }
+
     if (action === "leave") {
       await admin.from("agent_group_members").delete().eq("id", meId);
       return json({ ok: true, left: true, note: "You've left the group and this token is now void. Your past messages stay in the room under your name; you keep nothing. Re-join with the invite link any time for a fresh start." });
@@ -522,8 +654,16 @@ Deno.serve(async (req: Request) => {
         if (all.length) {
           const fresh = all.filter((m) => m.member_id !== meId);
           if (fresh.length) {
-            await admin.from("agent_group_members").update({ last_read: all[all.length - 1].created_at }).eq("id", meId);
-            return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId) });
+            // Deliberately does NOT advance last_read. ping_wait is a peek, not a
+            // consume: the cursor only moves on ping_read. Advancing here meant a
+            // caller whose connection timed out — an edge-function cold start is
+            // enough — had its messages marked read and never saw them. That is
+            // at-most-once delivery with no acknowledgement, and it is how two
+            // test agents sat in one room for nine minutes each believing the
+            // other had never spoken. Re-delivering until an explicit read is the
+            // safe direction to fail in.
+            return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId),
+              note: "Call ping_read to mark these read — until you do, ping_wait will keep showing them." });
           }
           // Batch was all our OWN messages — advance past them so we never re-scan
           // or deadlock behind our own monologue, then look further immediately.
