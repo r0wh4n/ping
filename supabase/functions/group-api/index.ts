@@ -35,6 +35,7 @@ const rand = (n: number) => { const a = new Uint8Array(n); crypto.getRandomValue
 const newInvite = () => "gk_" + rand(9);
 const newMemberToken = () => "gm_" + rand(24);
 const newWebhook = () => "wh_" + rand(18);
+const clip = (v: string, max: number) => (v.length > max ? v.slice(0, max) + ` …[+${v.length - max} more, fetch with ping_tasks task_id]` : v);
 const cleanName = (s: unknown) => String(s ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
 const inviteFrom = (s: unknown) => {
   const t = String(s ?? "").trim();
@@ -83,17 +84,23 @@ async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknow
   const { count: held } = await admin.from("agent_tasks")
     .select("id", { count: "exact", head: true })
     .eq("group_id", gid).eq("assignee", meId).in("state", ["working", "input-required"]);
-  if ((held ?? 0) >= 3) return [];
+  const atLimit = (held ?? 0) >= 3;
   const { data } = await admin.from("agent_tasks")
     .select("id,title,skills,created_at").eq("group_id", gid).eq("state", "submitted")
-    .order("created_at", { ascending: true }).limit(10);
-  return (data ?? [])
-    .filter((t) => {
-      const need = ((t.skills ?? []) as string[]).map((x) => String(x).toLowerCase());
-      return need.length === 0 || need.some((n) => mine.includes(n));
-    })
-    .slice(0, 5)
-    .map((t) => ({ task_id: t.id, title: t.title, skills: t.skills }));
+    .order("created_at", { ascending: true }).limit(50);
+  const open = data ?? [];
+  const matches = open.filter((t) => {
+    const need = ((t.skills ?? []) as string[]).map((x) => String(x).toLowerCase());
+    return need.length === 0 || need.some((n) => mine.includes(n));
+  });
+  // Reporting only what you CAN take left agents unable to tell an empty board
+  // from a board full of other people's work — so they polled into the void.
+  return {
+    mine: atLimit ? [] : matches.slice(0, 5).map((t) => ({ task_id: t.id, title: t.title, skills: t.skills })),
+    open_total: open.length,
+    not_for_me: open.length - matches.length,
+    at_limit: atLimit,
+  };
 }
 
 // deno-lint-ignore no-explicit-any
@@ -288,8 +295,16 @@ Deno.serve(async (req: Request) => {
         .from("agent_group_members").insert({ group_id: g.id, token, name }).select("id").single();
       if (error) return json({ ok: false, error: error.message });
       await rateSpend(admin, joinBucket, RL.join); // charge only a join that happened
+      // A retry that already succeeded leaves two memberships under one name —
+      // seen in a live run. Deliberately NOT deduped by returning the existing
+      // token: that would hand anyone with the invite link another agent's
+      // identity. Flagged instead, so the caller can leave the spare.
+      const { count: sameName } = await admin.from("agent_group_members")
+        .select("id", { count: "exact", head: true }).eq("group_id", g.id).eq("name", name);
+      const dupe = (sameName ?? 0) > 1;
       return json({
         ok: true, group_id: g.id, group: g.name, your_name: name, member_id: m.id, token,
+        ...(dupe ? { warning: `There are now ${sameName} members called "${name}" in this room. If an earlier join of yours already succeeded, call ping_leave with that token — two memberships means you will see every message twice.` } : {}),
         next_step: `Joined \"${g.name}\" as \"${name}\". Set ${token} as your MCP bearer token, then use ping_say / ping_wait / ping_read / ping_share / ping_log.`,
       });
     }
@@ -563,10 +578,14 @@ Deno.serve(async (req: Request) => {
 
     if (action === "tasks") {
       const state = body.state ? String(body.state) : null;
+      // One task in full, when you actually want the whole thing.
+      const only = body.task_id ? String(body.task_id) : null;
+      const CAP = 600; // a listing is for scanning; full text is a task_id away
       let q = admin.from("agent_tasks")
         .select("id,title,detail,state,skills,created_by,assignee,result,artifact,created_at,updated_at,context_id")
         .eq("group_id", gid).order("created_at", { ascending: false }).limit(100);
       if (state) q = q.eq("state", state);
+      if (only) q = q.eq("id", only);
       const { data: rows } = await q;
       const ids = [...new Set((rows ?? []).flatMap((t) => [t.created_by, t.assignee]).filter(Boolean))];
       const names: Record<string, string> = {};
@@ -575,11 +594,18 @@ Deno.serve(async (req: Request) => {
         (ms ?? []).forEach((m) => (names[String(m.id)] = String(m.name)));
       }
       return json({ ok: true, count: (rows ?? []).length, tasks: (rows ?? []).map((t) => ({
-        id: t.id, title: t.title, detail: t.detail, artifact: t.artifact ?? "", state: t.state, skills: t.skills,
+        id: t.id, title: t.title, detail: t.detail, state: t.state, skills: t.skills,
+        // Listings used to inline every result and artifact in full, which was
+        // merely noisy at 20 tasks and unusable at 200. Ask for one by task_id
+        // to get it whole.
+        artifact: only ? (t.artifact ?? "") : clip(String(t.artifact ?? ""), CAP),
+        artifact_truncated: !only && String(t.artifact ?? "").length > CAP,
         offered_by: t.created_by ? (names[String(t.created_by)] ?? "?") : null,
         assignee: t.assignee ? (names[String(t.assignee)] ?? "?") : null,
         mine: String(t.assignee ?? "") === meId,
-        result: t.result, context_id: t.context_id, created_at: t.created_at, updated_at: t.updated_at,
+        result: only ? t.result : clip(String(t.result ?? ""), CAP),
+        result_truncated: !only && String(t.result ?? "").length > CAP,
+        context_id: t.context_id, created_at: t.created_at, updated_at: t.updated_at,
       })) });
     }
 
@@ -727,9 +753,10 @@ Deno.serve(async (req: Request) => {
         const cursor = msgs.length ? msgs[msgs.length - 1].created_at : new Date().toISOString();
         await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
       }
-      const work = await openWorkFor(admin, gid, meId, me.card);
+      const w = await openWorkFor(admin, gid, meId, me.card);
       return json({ ok: true, group: await groupName(admin, gid), count: msgs.length, messages: await shape(admin, msgs, meId),
-        ...(work.length ? { open_tasks: work, work_note: "Open work matching your card. Take one with ping_claim." } : {}) });
+        open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me,
+        ...(w.mine.length ? { work_note: "Open work matching your card. Take one with ping_claim." } : {}) });
     }
     if (action === "history") {
       // Page BACKWARD through the timeline (older than `before`). Read-only —
@@ -801,9 +828,10 @@ Deno.serve(async (req: Request) => {
             // test agents sat in one room for nine minutes each believing the
             // other had never spoken. Re-delivering until an explicit read is the
             // safe direction to fail in.
-            const work = await openWorkFor(admin, gid, meId, me.card);
+            const w = await openWorkFor(admin, gid, meId, me.card);
             return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId),
-              ...(work.length ? { open_tasks: work, work_note: "Open work matching your card. Take one with ping_claim." } : {}),
+              open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me,
+              ...(w.mine.length ? { work_note: "Open work matching your card. Take one with ping_claim." } : {}),
               note: "Call ping_read to mark these read — until you do, ping_wait will keep showing them." });
           }
           // Batch was all our OWN messages — advance past them so we never re-scan
@@ -813,10 +841,21 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         if (Date.now() - startedAt >= maxMs) {
-          const work = await openWorkFor(admin, gid, meId, me.card);
-          return json({ ok: true, count: 0, timed_out: true,
-            ...(work.length ? { open_tasks: work, work_note: "Nobody spoke, but there is open work matching your card. Take one with ping_claim." } : {}),
-            note: "No reply yet — call ping_wait again to keep waiting." });
+          const w = await openWorkFor(admin, gid, meId, me.card);
+          // `timed_out` used to be true even when work was being handed over in
+          // the same response, which reads as "nothing happened". It now means
+          // exactly one thing: there is nothing here for you at all.
+          const idle = w.mine.length === 0;
+          return json({ ok: true, count: 0, timed_out: idle,
+            open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me,
+            ...(w.mine.length ? { work_note: "Nobody spoke, but there is open work matching your card. Take one with ping_claim." } : {}),
+            note: w.mine.length
+              ? "No messages, but work is waiting for you above."
+              : w.at_limit
+                ? "No messages. You are already holding 3 open tasks — finish or release one before taking more."
+                : w.not_for_me > 0
+                  ? `No messages, and the ${w.not_for_me} open task(s) in this room need skills your card does not list. Update your card with ping_card if you can do them.`
+                  : "No messages and the board is empty — nothing to do here right now." });
         }
         await sleep(1200);
       }
