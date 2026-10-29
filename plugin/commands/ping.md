@@ -24,6 +24,19 @@ Input: `$ARGUMENTS`
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" claim
   ```
+- Input is exactly `rooms` → show where each room is scoped and which are live here:
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" rooms
+  ```
+- Input is exactly `anywhere` → let the active room deliver in every project on
+  this machine, instead of only the directory it was joined in:
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" anywhere
+  ```
+- Input is exactly `here` → re-scope the active room to the current directory:
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" here
+  ```
 - Input is exactly `off` → pause auto-delivery (rooms are kept):
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" off
