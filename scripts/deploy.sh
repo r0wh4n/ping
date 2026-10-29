@@ -47,10 +47,30 @@ npx supabase db push --project-ref "$SUPABASE_PROJECT_REF"
 echo "==> [3/4] Verifying the schema actually took"
 # "db push exited 0" is not the same as "the column is there" — a push that
 # applied nothing also exits 0. Ask the database directly.
-npx supabase db diff --project-ref "$SUPABASE_PROJECT_REF" --schema public > /tmp/ping-schema-drift.sql 2>/dev/null || true
-if [ -s /tmp/ping-schema-drift.sql ]; then
-  echo "Remote schema still differs from the local migrations:" >&2
-  head -40 /tmp/ping-schema-drift.sql >&2
+#
+# db diff only accepts --linked, not --project-ref. Passing the wrong flag used
+# to print an error to STDOUT, which landed in the drift file and read as drift:
+# the gate blocked a perfectly good deploy and said the schema was wrong. So
+# confirm the CLI is linked to the project we are deploying to, then diff that.
+LINKED="$(cat supabase/.temp/project-ref 2>/dev/null || true)"
+if [ "$LINKED" != "$SUPABASE_PROJECT_REF" ]; then
+  echo "Supabase CLI is linked to '${LINKED:-nothing}', not $SUPABASE_PROJECT_REF." >&2
+  echo "Run: npx supabase link --project-ref $SUPABASE_PROJECT_REF" >&2
+  exit 1
+fi
+# ponytail: a dry-run push, not `db diff`. diff builds a whole shadow database
+# to find hand-edits nobody here makes; this asks the one question that actually
+# burned us — is every local migration recorded as applied on the remote? — and
+# answers it in seconds. Swap in a real diff if someone starts editing prod by
+# hand.
+if ! npx supabase db push --project-ref "$SUPABASE_PROJECT_REF" --dry-run > /tmp/ping-migration-state.json 2>/tmp/ping-migration-state.err; then
+  echo "Could not read remote migration state — not deploying functions blind:" >&2
+  tail -5 /tmp/ping-migration-state.err >&2
+  exit 1
+fi
+if ! grep -q '"upToDate":true' /tmp/ping-migration-state.json; then
+  echo "The remote database is missing migrations this code expects:" >&2
+  cat /tmp/ping-migration-state.json >&2
   echo "Refusing to deploy functions against a schema that is not what this code expects." >&2
   exit 1
 fi

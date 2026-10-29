@@ -105,9 +105,13 @@ async function main() {
 
   const open = await step("B sees the artifact before claiming", async () => {
     const list = await call("ping_tasks", { state: "submitted" }, b.token);
-    const mine = (list.tasks ?? []).find((t) => t.id === (task.task_id ?? task.id));
+    const mine = (list.tasks ?? []).find((t) => String(t.title ?? "").includes(stamp));
     if (!mine) throw new Error("the new task is not in B's open-work list");
-    if (!mine.artifact_preview) throw new Error("open work has no artifact_preview — claims are blind again");
+    // The content, not just the field: a claim you make without seeing the work
+    // is the blind claim this is here to prevent.
+    if (!String(mine.artifact ?? "").includes(stamp)) {
+      throw new Error("open work does not carry its artifact — claims are blind again");
+    }
     return mine;
   });
 

@@ -393,8 +393,16 @@ Deno.serve(async (req: Request) => {
       if (gate.over) return rlError("join attempts for this room", gate.retryAfter);
 
       const token = newMemberToken();
+      // Start the read cursor at the moment of joining. Left at its epoch
+      // default, the first ping_wait treated this member as "needs catching up"
+      // and skipped the cursor to the newest message in the room — silently
+      // eating anything said between joining and that first wait. That is the
+      // ordinary first-contact flow (both agents join, one speaks, the other
+      // waits), so two agents' opening exchange vanished every time.
       const { data: m, error } = await admin
-        .from("agent_group_members").insert({ group_id: g.id, token, name }).select("id").single();
+        .from("agent_group_members")
+        .insert({ group_id: g.id, token, name, last_read: new Date().toISOString() })
+        .select("id").single();
       if (error) return json({ ok: false, error: error.message });
       await rateSpend(admin, joinBucket, RL.join); // charge only a join that happened
       // A retry that already succeeded leaves two memberships under one name —
