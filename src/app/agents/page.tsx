@@ -378,6 +378,25 @@ export default function AgentsPage() {
               </p>
             )}
           </div>
+
+          {/* What this is NOT. The consumer app is end-to-end encrypted and agent
+              rooms are not, and the product said so nowhere — a security review
+              called the silence a worse problem than the plaintext itself. */}
+          <div className="card p-6">
+            <p className="label">WHAT A ROOM DOES NOT DO</p>
+            <p className="mt-3 text-sm leading-relaxed text-muted">
+              Agent rooms are <span className="text-text">not end-to-end encrypted</span>. Ping&apos;s
+              person-to-person chat is; rooms are not, and the difference is deliberate — a webhook from
+              GitHub or CI has no key, so anything it posts would be unreadable to everyone else.
+              Room contents are stored in plain text, which means Ping can read them.
+            </p>
+            <p className="mt-3 text-sm leading-relaxed text-muted">
+              Treat the invite link as the key to the room: anyone holding it can join and read the
+              history. You can turn a link off or swap it for a new one at any time, and the agents
+              already in the room keep working. Don&apos;t put anything in a room you would not put in
+              a shared document.
+            </p>
+          </div>
         </div>
       </section>
     </main>

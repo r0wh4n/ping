@@ -402,6 +402,41 @@ end $$;
 ALTER FUNCTION "public"."notify_new_message"() OWNER TO "postgres";
 
 
+CREATE OR REPLACE FUNCTION "public"."notify_agent_room_message"() RETURNS "trigger"
+    LANGUAGE "plpgsql" SECURITY DEFINER
+    SET "search_path" TO 'vault', 'public'
+    AS $$
+declare secret text; base text;
+begin
+  -- Chat and events are things a person wants to know. Context is seeding and
+  -- log is machine noise; neither is worth a buzz.
+  if NEW.kind not in ('chat', 'event') then return NEW; end if;
+
+  -- ponytail: one push per room per 2 min, not per user. A room's watchers are
+  -- few and all see the same activity, so per-room is the same answer for less
+  -- work. Go per-user if someone ever watches enough rooms for this to collide.
+  if not public.rl_hit('roompush:' || NEW.group_id::text, 1, 120) then return NEW; end if;
+
+  select decrypted_secret into secret from vault.decrypted_secrets where name = 'push_webhook_secret';
+  if secret is null then return NEW; end if;
+
+  -- Staging sets functions_base_url; production falls back to its own.
+  select decrypted_secret into base from vault.decrypted_secrets where name = 'functions_base_url';
+  base := coalesce(base, 'https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1');
+
+  perform net.http_post(
+    url := base || '/send-push',
+    headers := jsonb_build_object('Content-Type', 'application/json', 'x-webhook-secret', secret),
+    body := jsonb_build_object('room', NEW.group_id, 'title', NEW.title,
+                               'body', NEW.body, 'author', NEW.author_name)
+  );
+  return NEW;
+end $$;
+
+
+ALTER FUNCTION "public"."notify_agent_room_message"() OWNER TO "postgres";
+
+
 CREATE OR REPLACE FUNCTION "public"."prune_expired_messages"() RETURNS "void"
     LANGUAGE "sql" SECURITY DEFINER
     SET "search_path" TO 'public'
@@ -569,7 +604,10 @@ CREATE TABLE IF NOT EXISTS "public"."agent_groups" (
     "created_at" timestamp with time zone DEFAULT "now"() NOT NULL,
     "webhook_token" "text",
     "invite_revoked_at" timestamp with time zone,
-    "invite_expires_at" timestamp with time zone
+    "invite_expires_at" timestamp with time zone,
+    "webhook_secret" "text",
+    "webhook_verified_at" timestamp with time zone,
+    CONSTRAINT "agent_groups_webhook_secret_check" CHECK (("webhook_secret" IS NULL) OR (("char_length"("webhook_secret") >= 16) AND ("char_length"("webhook_secret") <= 256)))
 );
 
 
@@ -1120,6 +1158,9 @@ CREATE INDEX "signup_attempts_ip_idx" ON "public"."signup_attempts" USING "btree
 
 
 CREATE OR REPLACE TRIGGER "on_message_insert" AFTER INSERT ON "public"."messages" FOR EACH ROW EXECUTE FUNCTION "public"."notify_new_message"();
+
+
+CREATE OR REPLACE TRIGGER "on_agent_room_message" AFTER INSERT ON "public"."agent_group_messages" FOR EACH ROW EXECUTE FUNCTION "public"."notify_agent_room_message"();
 
 
 
@@ -2147,6 +2188,10 @@ GRANT ALL ON FUNCTION "public"."list_agent_members"("p_group" "uuid") TO "servic
 
 REVOKE ALL ON FUNCTION "public"."notify_new_message"() FROM PUBLIC;
 GRANT ALL ON FUNCTION "public"."notify_new_message"() TO "service_role";
+
+
+REVOKE ALL ON FUNCTION "public"."notify_agent_room_message"() FROM PUBLIC;
+GRANT ALL ON FUNCTION "public"."notify_agent_room_message"() TO "service_role";
 
 
 

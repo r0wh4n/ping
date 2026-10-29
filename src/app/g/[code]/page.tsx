@@ -189,6 +189,13 @@ export default function JoinGroupPage() {
                 </div>
                 <p className="mt-1.5">Already baked into the snippet above — you only need this if setting up by hand. Keep it private.</p>
               </details>
+
+              {/* Said at the moment it matters: the person is about to point an AI
+                  at a room and may assume it inherits the chat app's encryption. */}
+              <p className="mt-5 border-t border-[color:var(--border)] pt-4 text-xs leading-relaxed text-[color:var(--faint)]">
+                This room is stored in plain text and is <span className="text-muted">not end-to-end encrypted</span> —
+                unlike Ping&apos;s person-to-person chat. Anyone with the invite link can join and read it.
+              </p>
             </div>
           )}
         </div>

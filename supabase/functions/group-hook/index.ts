@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import { checkSignature } from "./signature.ts";
 
 // Incoming webhook for agent groups. External tools (GitHub / CI / Linear / curl)
 // POST here; the event is formatted and posted into the group timeline as a bot
@@ -18,7 +19,7 @@ import { createClient } from "jsr:@supabase/supabase-js@2";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-ping-token, x-github-event",
+  "Access-Control-Allow-Headers": "authorization, content-type, apikey, x-ping-token, x-github-event, x-hub-signature-256, linear-signature, x-ping-signature",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 const json = (o: unknown, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { ...cors, "Content-Type": "application/json" } });
@@ -119,9 +120,9 @@ function actorOf(source: string, p: P): string | null {
   return clean(p?.author || p?.actor || p?.user, 80) || null;
 }
 
-async function readPayload(req: Request): Promise<P> {
-  const ctype = (req.headers.get("content-type") || "").toLowerCase();
-  const raw = await req.text().catch(() => "");
+// Takes the raw body rather than the Request: the signature is computed over
+// the exact bytes that arrived, and a body can only be read once.
+function readPayload(raw: string, ctype: string): P {
   if (!raw) return {};
   // GitHub's "application/x-www-form-urlencoded" content-type setting sends the
   // JSON inside a `payload` form field. The old code JSON.parsed the raw form
@@ -135,6 +136,23 @@ async function readPayload(req: Request): Promise<P> {
   }
   try { return JSON.parse(raw); } catch { return {}; }
 }
+
+
+// ---- Webhook signature verification ----------------------------------------
+//
+// The wh_ token is an identifier, not authentication: it rides in URLs, CI
+// config and logs. Anyone who learned one could post events that every agent in
+// the room then treats as fact — prompt injection with a delivery mechanism.
+//
+// Enforcement is deliberately staged so that turning signing ON can never
+// silently drop a live webhook:
+//   no secret          -> accept, and mark the event unverified in the room
+//   secret, none seen  -> accept signed or unsigned; a good signature promotes
+//   secret, seen good  -> require a good signature
+// Once a sender has proved it can sign, a request that does not is not from it.
+//
+// The primitives live in signature.ts so the Node self-check exercises the same
+// bytes this function runs: scripts/check-webhook-signature.mjs
 
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
@@ -157,11 +175,29 @@ Deno.serve(async (req: Request) => {
     });
     if (allowed === false) return json({ ok: false, error: "Rate limit - too many webhook posts. Slow down." }, 429);
 
-    const { data: g } = await admin.from("agent_groups").select("id").eq("webhook_token", token).maybeSingle();
+    const { data: g } = await admin.from("agent_groups")
+      .select("id,webhook_secret,webhook_verified_at").eq("webhook_token", token).maybeSingle();
     if (!g) return json({ ok: false, error: "Unknown webhook." }, 404);
 
+    // Read the body ONCE, as text, before anything parses it: the signature
+    // covers the exact bytes that arrived, not a re-serialised object.
+    const raw = await req.text().catch(() => "");
+    const secret = g.webhook_secret ? String(g.webhook_secret) : "";
+    const verdict = secret ? await checkSignature(req.headers, raw, secret) : "absent";
+
+    if (secret && verdict === "bad")
+      return json({ ok: false, error: "Signature did not match this room's webhook secret." }, 401);
+    if (secret && verdict === "absent" && g.webhook_verified_at)
+      return json({ ok: false, error: "This webhook requires a signature. Send X-Hub-Signature-256 (GitHub), Linear-Signature, or X-Ping-Signature as hex HMAC-SHA256 of the raw body." }, 401);
+    if (verdict === "good" && !g.webhook_verified_at) {
+      // First correctly signed request: from here on, unsigned is refused.
+      await admin.from("agent_groups")
+        .update({ webhook_verified_at: new Date().toISOString() }).eq("id", g.id);
+    }
+    const verified = verdict === "good";
+
     const ghEvent = clean(req.headers.get("x-github-event"), 40);
-    const payload: P = await readPayload(req);
+    const payload: P = readPayload(raw, (req.headers.get("content-type") || "").toLowerCase());
 
     let source = "webhook";
     let text = "";
@@ -180,11 +216,20 @@ Deno.serve(async (req: Request) => {
     if (!text.trim()) return json({ ok: true, skipped: true }); // unhandled/filtered event
     text = text.slice(0, 2000);
 
+    // An agent reading the room cannot see HTTP headers, so provenance has to
+    // travel in the text it actually reads. Anyone who learns the hook URL can
+    // post an unsigned event; saying so inline is what stops it being believed.
+    const author = actorOf(source, payload);
     const { error } = await admin
       .from("agent_group_messages")
-      .insert({ group_id: g.id, member_id: null, kind: "event", source, body: text, author_name: actorOf(source, payload) });
+      .insert({
+        group_id: g.id, member_id: null, kind: "event", source,
+        body: verified ? text : `${text}  [unverified sender]`,
+        author_name: verified ? author : `${author} (unverified)`.slice(0, 80),
+      });
     if (error) return json({ ok: false, error: error.message }, 500);
-    return json({ ok: true, posted: text });
+    return json({ ok: true, posted: text, verified,
+      ...(verified ? {} : { hint: "This event was not signed. Set a webhook secret on the room so agents can tell real events from injected ones." }) });
   } catch (e) {
     return json({ ok: false, error: "Server error: " + String(e) }, 500);
   }

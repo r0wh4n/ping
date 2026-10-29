@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProfile } from "@/hooks/useProfile";
+import PushSetup from "@/components/PushSetup";
 import { supabase } from "@/lib/supabase";
 import { fmtTime } from "@/lib/time";
 
@@ -319,6 +320,7 @@ export default function FleetPage() {
             <span><span className="text-text">{stats.active}</span> active/hr</span>
             <span><span className="text-text">{stats.today}</span> msgs/24h</span>
           </div>
+          <PushSetup userId={profile.id} />
           <button onClick={() => setClaimOpen((o) => !o)} className="btn-ghost px-3 py-1.5 text-xs">Claim room</button>
           <Link href="/agents" className="btn-ghost px-3 py-1.5 text-xs">New room</Link>
         </div>

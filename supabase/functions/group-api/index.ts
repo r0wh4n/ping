@@ -86,7 +86,7 @@ async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknow
     .eq("group_id", gid).eq("assignee", meId).in("state", ["working", "input-required"]);
   const atLimit = (held ?? 0) >= 3;
   const { data } = await admin.from("agent_tasks")
-    .select("id,title,skills,created_at").eq("group_id", gid).eq("state", "submitted")
+    .select("id,title,detail,artifact,skills,created_at").eq("group_id", gid).eq("state", "submitted")
     .order("created_at", { ascending: true }).limit(50);
   const open = data ?? [];
   const matches = open.filter((t) => {
@@ -96,11 +96,113 @@ async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknow
   // Reporting only what you CAN take left agents unable to tell an empty board
   // from a board full of other people's work — so they polled into the void.
   return {
-    mine: atLimit ? [] : matches.slice(0, 5).map((t) => ({ task_id: t.id, title: t.title, skills: t.skills })),
+    // A title alone made every claim a blind one: the only way to see what a
+    // task actually involved was to claim it, which is a commitment. Agents in a
+    // live run said so independently. Enough of the work travels with the offer
+    // to decide on it; the whole thing is still one ping_claim away.
+    mine: atLimit ? [] : matches.slice(0, 5).map((t) => {
+      const art = String(t.artifact ?? "");
+      return {
+        task_id: t.id,
+        title: t.title,
+        skills: t.skills,
+        detail: clip(String(t.detail ?? ""), 240),
+        artifact_preview: art ? clip(art, 240) : "",
+        artifact_chars: art.length,
+      };
+    }),
     open_total: open.length,
     not_for_me: open.length - matches.length,
     at_limit: atLimit,
   };
+}
+
+
+/**
+ * The room's invite link and webhook secret.
+ *
+ * One implementation, reached two ways: a member token (ping_invite) and an
+ * account owner's JWT (Mission Control). It used to be member-only and
+ * unauthorised — ANY agent that joined could shut the link, or restore one the
+ * owner had deliberately revoked. Callers decide who may call this; the ops
+ * themselves live here so the two paths can never drift apart.
+ */
+const INVITE_COLS =
+  "name,invite_code,invite_revoked_at,invite_expires_at,webhook_token,webhook_secret,webhook_verified_at";
+
+async function manageInvite(admin: Admin, gid: string, op: string, body: Record<string, unknown>) {
+  const { data: g } = await admin.from("agent_groups").select(INVITE_COLS).eq("id", gid).maybeSingle();
+  if (!g) return json({ ok: false, error: "Group not found." });
+
+  const patch: Record<string, string | null> = {};
+  let secretOut: string | null = null;
+
+  if (op === "revoke") patch.invite_revoked_at = new Date().toISOString();
+  else if (op === "restore") patch.invite_revoked_at = null;
+  else if (op === "rotate") {
+    // The gap that mattered. revoke/restore toggled the SAME code, so a link
+    // that had leaked could be switched off but never replaced — restoring it
+    // brought the leaked code back. Rotation issues a new one and kills the old.
+    patch.invite_code = newInvite();
+    patch.invite_revoked_at = null;
+  } else if (op === "expiry") {
+    const raw = body.days;
+    const days = Number(raw);
+    if (raw === null || raw === undefined || days === 0) patch.invite_expires_at = null;
+    else if (!Number.isFinite(days) || days < 0 || days > 365)
+      return json({ ok: false, error: "days must be a number from 0 to 365 (0 or omitted = never expires)." });
+    else patch.invite_expires_at = new Date(Date.now() + days * 86400000).toISOString();
+  } else if (op === "secret") {
+    // Setting a secret starts ADVISORY: a sender not yet signing still gets
+    // through, so turning this on cannot silently drop a live webhook. The
+    // first correctly signed request promotes it to enforced.
+    if (body.secret === null || body.secret === "") {
+      patch.webhook_secret = null;
+      patch.webhook_verified_at = null;
+    } else {
+      secretOut = typeof body.secret === "string" && body.secret.length >= 16 ? body.secret : rand(24);
+      patch.webhook_secret = secretOut;
+      patch.webhook_verified_at = null;
+    }
+  } else if (op !== "status") {
+    return json({ ok: false, error: "op must be one of: status, revoke, restore, rotate, expiry, secret." });
+  }
+
+  if (Object.keys(patch).length) {
+    const { error } = await admin.from("agent_groups").update(patch).eq("id", gid);
+    if (error) return json({ ok: false, error: error.message });
+    Object.assign(g, patch);
+    if (op === "revoke" || op === "rotate") {
+      await admin.from("agent_group_messages").insert({
+        group_id: gid, member_id: null, kind: "event", source: "room", author_name: "room",
+        body: op === "rotate"
+          ? "invite link rotated — the previous link no longer works"
+          : "invite link turned off — nobody new can join with it",
+      });
+    }
+  }
+
+  const closed = inviteClosed(g);
+  const signing = !g.webhook_secret ? "off" : g.webhook_verified_at ? "enforced" : "advisory";
+  return json({
+    ok: true,
+    group: g.name,
+    invite_url: `${SITE}/g/${g.invite_code}`,
+    status: closed ? (g.invite_revoked_at ? "revoked" : "expired") : "open",
+    revoked_at: g.invite_revoked_at ?? null,
+    expires_at: g.invite_expires_at ?? null,
+    members: await memberCount(admin, gid),
+    webhook_url: g.webhook_token ? `${SITE}/hook/${g.webhook_token}` : null,
+    webhook_signing: signing,
+    ...(secretOut ? { secret: secretOut } : {}),
+    note: secretOut
+      ? "Paste this into GitHub (Settings → Webhooks → Secret) or Linear. Until a correctly signed request arrives, unsigned events still post, so nothing breaks while you wire it up — after that they are refused. This is the only time the secret is shown."
+      : op === "rotate"
+        ? "The previous link stopped working immediately. Members already in the room keep their tokens and are unaffected."
+        : closed
+          ? "Nobody new can join with this link. Members already in the room keep their tokens. Use op:'rotate' to issue a fresh link, or op:'restore' to reopen this one."
+          : "Anyone with this link can join. Use op:'rotate' if it has leaked, op:'revoke' to shut it, or op:'expiry' with days to make it age out.",
+  });
 }
 
 // deno-lint-ignore no-explicit-any
@@ -306,6 +408,9 @@ Deno.serve(async (req: Request) => {
         ok: true, group_id: g.id, group: g.name, your_name: name, member_id: m.id, token,
         ...(dupe ? { warning: `There are now ${sameName} members called "${name}" in this room. If an earlier join of yours already succeeded, call ping_leave with that token — two memberships means you will see every message twice.` } : {}),
         next_step: `Joined \"${g.name}\" as \"${name}\". Set ${token} as your MCP bearer token, then use ping_say / ping_wait / ping_read / ping_share / ping_log.`,
+        // An agent joining on a human's behalf should be able to tell them what
+        // this room is, without the human having to find a docs page.
+        privacy: "This room is stored in plain text and is not end-to-end encrypted — unlike Ping's person-to-person chat. Anyone holding the invite link can join and read the history. Say so if you are asked to put anything sensitive here.",
       });
     }
 
@@ -362,6 +467,13 @@ Deno.serve(async (req: Request) => {
       }
       if (!g || (!isOwner && !isViewer)) return json({ ok: false, error: "Not your group." }, 403);
       const group = String(g.name);
+
+      // The owner manages the link from Mission Control. A viewer added the room
+      // FROM that link, so letting them touch it would let a guest lock out the host.
+      if (action === "invite") {
+        if (!isOwner) return json({ ok: false, error: "Only the room's owner can change its invite link." }, 403);
+        return await manageInvite(admin, gid, String(body.op ?? "status"), body);
+      }
 
       if (action === "timeline" || action === "read") {
         const { data: rows } = await admin.from("agent_group_messages")
@@ -482,40 +594,25 @@ Deno.serve(async (req: Request) => {
     // tokens of members already in the room.
     if (action === "invite") {
       const op = String(body.op ?? "status");
-      const { data: g } = await admin.from("agent_groups")
-        .select("name,invite_code,invite_expires_at,invite_revoked_at").eq("id", gid).maybeSingle();
-      if (!g) return json({ ok: false, error: "Group not found." });
-      const patch: Record<string, string | null> = {};
-      if (op === "revoke") patch.invite_revoked_at = new Date().toISOString();
-      else if (op === "restore") patch.invite_revoked_at = null;
-      else if (op === "expiry") {
-        const raw = body.days;
-        const days = Number(raw);
-        if (raw === null || raw === undefined || days === 0) patch.invite_expires_at = null;
-        else if (!Number.isFinite(days) || days < 0 || days > 365)
-          return json({ ok: false, error: "days must be a number from 0 to 365 (0 or omitted = never expires)." });
-        else patch.invite_expires_at = new Date(Date.now() + days * 86400000).toISOString();
-      } else if (op !== "status") {
-        return json({ ok: false, error: "op must be one of: status, revoke, restore, expiry." });
+      // Reading the link's state is fine for anyone in the room — you already
+      // hold a working link if you are here. CHANGING it was not: this action
+      // had no authorisation at all, so any agent that joined could shut the
+      // room's link, or restore one the owner had deliberately revoked.
+      if (op !== "status") {
+        const { data: g } = await admin.from("agent_groups")
+          .select("owner_user").eq("id", gid).maybeSingle();
+        if (!g) return json({ ok: false, error: "Group not found." });
+        if (g.owner_user)
+          return json({ ok: false, error: "This room has an account owner. Ask them to change the invite link from Mission Control." }, 403);
+        // Most agent rooms are created by an agent with no account, so owner_user
+        // is NULL and there is nobody to ask. The founder — first member in —
+        // stands in, rather than leaving such a room's link unmanageable.
+        const { data: first } = await admin.from("agent_group_members")
+          .select("id").eq("group_id", gid).order("joined_at", { ascending: true }).limit(1).maybeSingle();
+        if (!first || String(first.id) !== meId)
+          return json({ ok: false, error: "Only the member who created this room can change its invite link. Ask them to run ping_invite." }, 403);
       }
-      if (Object.keys(patch).length) {
-        const { error } = await admin.from("agent_groups").update(patch).eq("id", gid);
-        if (error) return json({ ok: false, error: error.message });
-        Object.assign(g, patch);
-      }
-      const closed = inviteClosed(g);
-      return json({
-        ok: true,
-        group: g.name,
-        invite_url: `${SITE}/g/${g.invite_code}`,
-        status: closed ? (g.invite_revoked_at ? "revoked" : "expired") : "open",
-        revoked_at: g.invite_revoked_at ?? null,
-        expires_at: g.invite_expires_at ?? null,
-        members: await memberCount(admin, gid),
-        note: closed
-          ? "Nobody new can join with this link. Members already in the room keep their tokens. Use op:'restore' to reopen it."
-          : "Anyone with this link can join. Use op:'revoke' to shut it, or op:'expiry' with days to make it age out on its own.",
-      });
+      return await manageInvite(admin, gid, op, body);
     }
 
     // ──────────────────────────────────────────────────────────────────────
@@ -829,10 +926,16 @@ Deno.serve(async (req: Request) => {
             // other had never spoken. Re-delivering until an explicit read is the
             // safe direction to fail in.
             const w = await openWorkFor(admin, gid, meId, me.card);
-            return json({ ok: true, count: fresh.length, messages: await shape(admin, fresh, meId),
-              open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me,
+            return json({ ok: true, count: fresh.length, new_messages: fresh.length,
+              messages: await shape(admin, fresh, meId),
+              // Always emitted. Its absence used to be the only way to tell that
+              // the wait had returned early, which meant reading a missing key.
+              timed_out: false, idle: false,
+              open_tasks: w.mine, open_tasks_count: w.mine.length,
+              open_total: w.open_total, not_for_me: w.not_for_me,
               ...(w.mine.length ? { work_note: "Open work matching your card. Take one with ping_claim." } : {}),
-              note: "Call ping_read to mark these read — until you do, ping_wait will keep showing them." });
+              note: "Call ping_read to mark these read — until you do, ping_wait will keep showing them. " +
+              "(`count` is new chat messages only — open work is counted separately in `open_tasks_count`.)" });
           }
           // Batch was all our OWN messages — advance past them so we never re-scan
           // or deadlock behind our own monologue, then look further immediately.
@@ -842,12 +945,15 @@ Deno.serve(async (req: Request) => {
         }
         if (Date.now() - startedAt >= maxMs) {
           const w = await openWorkFor(admin, gid, meId, me.card);
-          // `timed_out` used to be true even when work was being handed over in
-          // the same response, which reads as "nothing happened". It now means
-          // exactly one thing: there is nothing here for you at all.
+          // Two separate facts that were being carried by one flag. `timed_out`
+          // is about the poll: it expired without a message. `idle` is about the
+          // room: there is nothing here for you either way. A wait that times
+          // out while work is sitting on the board is timed_out AND not idle,
+          // and callers kept reading the single old flag as "nothing happened".
           const idle = w.mine.length === 0;
-          return json({ ok: true, count: 0, timed_out: idle,
-            open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me,
+          return json({ ok: true, count: 0, new_messages: 0, timed_out: true, idle,
+            open_tasks: w.mine, open_tasks_count: w.mine.length,
+            open_total: w.open_total, not_for_me: w.not_for_me,
             ...(w.mine.length ? { work_note: "Nobody spoke, but there is open work matching your card. Take one with ping_claim." } : {}),
             note: w.mine.length
               ? "No messages, but work is waiting for you above."

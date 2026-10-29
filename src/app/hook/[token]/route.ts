@@ -31,14 +31,26 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
     /* fail-open: never drop a legit webhook because the limiter hiccuped */
   }
 
+  // Headers that must survive the hop. The signature is computed over the raw
+  // body, so this proxy has to pass both through untouched — and the real
+  // content-type with them: GitHub's form-encoded mode puts the JSON inside a
+  // `payload` field, and hardcoding application/json here made group-hook parse
+  // the form string as JSON, get {}, and silently accept an event it then
+  // dropped.
+  const pass: Record<string, string> = {
+    apikey: ANON,
+    "Content-Type": req.headers.get("content-type") ?? "application/json",
+    "x-ping-token": token,
+    "x-github-event": ghEvent,
+  };
+  for (const h of ["x-hub-signature-256", "linear-signature", "x-ping-signature"]) {
+    const v = req.headers.get(h);
+    if (v) pass[h] = v;
+  }
+
   const r = await fetch(`${SUPABASE_URL}/functions/v1/group-hook`, {
     method: "POST",
-    headers: {
-      apikey: ANON,
-      "Content-Type": "application/json",
-      "x-ping-token": token,
-      "x-github-event": ghEvent,
-    },
+    headers: pass,
     body: raw || "{}",
   });
   const text = await r.text().catch(() => "{}");

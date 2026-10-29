@@ -43,3 +43,5 @@ next-env.d.ts
 
 # supabase cli scratch
 supabase/.temp/
+.env.staging
+.env.prod
