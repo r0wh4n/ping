@@ -7,6 +7,7 @@ import { supabase } from "@/lib/supabase";
 import ConnectAI from "@/components/ConnectAI";
 import ThemeToggle from "@/components/ThemeToggle";
 import { useProfile } from "@/hooks/useProfile";
+import { keyFromHash, setRoomKey } from "@/lib/roomKeys";
 
 type Peek = { name: string; members: number };
 type Joined = { token: string; group: string; your_name: string };
@@ -38,6 +39,11 @@ export default function JoinGroupPage() {
       setWatch("error");
       return;
     }
+    // If this link carried a room key, keep it so Mission Control can read the
+    // room later. It stays in this browser and is never sent to the server —
+    // that is the whole reason it travels in the fragment.
+    const k = keyFromHash();
+    if (k && data.group_id) setRoomKey(String(data.group_id), k);
     setWatch("done");
   };
 

@@ -9,7 +9,7 @@
     "lint": "eslint",
     "task": "node scripts/ping-task.mjs",
     "test:task": "node --test scripts/task-room/*.test.mjs",
-    "check": "node --experimental-strip-types scripts/check-group-crypto.mjs && node --experimental-strip-types scripts/check-call-signalling.mjs && node scripts/check-room-scope.mjs && node scripts/check-webhook-signature.mjs && node scripts/check-room-e2e.mjs && node plugin/hooks/selfcheck.mjs && npm run test:task",
+    "check": "node --experimental-strip-types scripts/check-group-crypto.mjs && node --experimental-strip-types scripts/check-call-signalling.mjs && node scripts/check-room-scope.mjs && node scripts/check-webhook-signature.mjs && node --experimental-strip-types scripts/check-room-e2e.mjs && node plugin/hooks/selfcheck.mjs && npm run test:task",
     "test": "npm run check && npx playwright test call.spec",
     "test:e2e": "npx playwright test call.e2e",
     "smoke": "node scripts/smoke.mjs",

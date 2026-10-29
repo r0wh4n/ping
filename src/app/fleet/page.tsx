@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useProfile } from "@/hooks/useProfile";
 import PushSetup from "@/components/PushSetup";
+import { getRoomKey, importRoomKey, isSealed, keyFromInput, openAll, openText, setRoomKey } from "@/lib/roomKeys";
 import { supabase } from "@/lib/supabase";
 import { fmtTime } from "@/lib/time";
 
@@ -62,6 +63,15 @@ export default function FleetPage() {
   const nearBottom = useRef(true);
   const prevHeight = useRef<number | null>(null);
 
+  // The active room's decryption key, as a ref for the same reason as activeRef:
+  // the timeline loaders and the realtime handler all need it, and none of them
+  // should be rebuilt when it changes. Null means the room is plaintext, or we
+  // do not hold its key.
+  const keyRef = useRef<CryptoKey | null>(null);
+  const [locked, setLocked] = useState(false);
+  const [unlockVal, setUnlockVal] = useState("");
+  const [unlockErr, setUnlockErr] = useState<string | null>(null);
+
   // The room being read, as a ref: the fleet subscription reads it inside its
   // handler and must not resubscribe every time you click a different room.
   const activeRef = useRef<string | null>(null);
@@ -89,7 +99,11 @@ export default function FleetPage() {
   const loadTimeline = useCallback(async (gid: string) => {
     const { data } = await supabase.functions.invoke("group-api", { body: { action: "timeline", group_id: gid } });
     if (data?.ok && Array.isArray(data.messages)) {
-      const fresh = data.messages as Msg[];
+      const raw = data.messages as Msg[];
+      // Sealed messages with no key is the one case worth surfacing: the room
+      // is readable, we just cannot read it from this browser yet.
+      setLocked(!keyRef.current && raw.some((m) => isSealed(m.text)));
+      const fresh = await openAll(raw, keyRef.current);
       setMsgs((cur) => {
         if (!fresh.length) return cur;
         const cutoff = fresh[0].created_at; // keep any older history we've paged in below the live window
@@ -108,12 +122,40 @@ export default function FleetPage() {
     setNoMore(false);
     setKind("all");
     setConfirmDelete(false);
+    setLocked(false);
+    setUnlockVal("");
+    setUnlockErr(null);
     nearBottom.current = true;
-    loadTimeline(active).finally(() => !stopped && setLoading(false));
+    // Clear first: without this, switching rooms would briefly decrypt the new
+    // room's messages with the previous room's key and render the envelope.
+    keyRef.current = null;
+    (async () => {
+      keyRef.current = await importRoomKey(getRoomKey(active));
+      if (!stopped) await loadTimeline(active);
+    })().finally(() => !stopped && setLoading(false));
     return () => {
       stopped = true;
     };
   }, [active, loadTimeline]);
+
+  // Unlock a room whose key this browser never captured — a room created by the
+  // plugin and claimed here, rather than opened from its invite link. Takes the
+  // key or the whole link; either is what someone has to hand.
+  const unlock = async () => {
+    setUnlockErr(null);
+    const k = keyFromInput(unlockVal);
+    const imported = k ? await importRoomKey(k) : null;
+    if (!active || !imported) {
+      setUnlockErr("That isn't a room key. Paste the invite link, or the part after #k=.");
+      return;
+    }
+    setRoomKey(active, k!);
+    keyRef.current = imported;
+    setLocked(false);
+    setUnlockVal("");
+    setMsgs([]);
+    await loadTimeline(active);
+  };
 
   /**
    * One subscription covering every room in the fleet, so the sidebar keeps
@@ -143,12 +185,27 @@ export default function FleetPage() {
           );
 
           if (gid !== activeRef.current) return;
-          setMsgs((cur) =>
-            cur.some((x) => (m.id && x.id === m.id) || (x.created_at === m.created_at && x.from === m.from && x.text === m.text))
-              ? cur
-              : [...cur, m]
-          );
-          setTick((t) => t + 1);
+          // Open before it lands in state, so the dedupe below compares
+          // plaintext against plaintext like every other path does.
+          void (async () => {
+            const key = keyRef.current;
+            const opened: Msg = {
+              ...m,
+              text: await openText(m.text, key),
+              title: m.title ? await openText(m.title, key) : m.title,
+            };
+            if (!key && isSealed(m.text)) setLocked(true);
+            setMsgs((cur) =>
+              cur.some(
+                (x) =>
+                  (opened.id && x.id === opened.id) ||
+                  (x.created_at === opened.created_at && x.from === opened.from && x.text === opened.text)
+              )
+                ? cur
+                : [...cur, opened]
+            );
+            setTick((t) => t + 1);
+          })();
         }
       )
       .subscribe((status) => {
@@ -195,7 +252,7 @@ export default function FleetPage() {
       body: { action: "history", group_id: active, before: oldest, limit: 100 },
     });
     if (data?.ok && Array.isArray(data.messages)) {
-      const older = data.messages as Msg[];
+      const older = await openAll(data.messages as Msg[], keyRef.current);
       if (older.length) setMsgs((cur) => [...older, ...cur]);
       if (!data.has_more || older.length === 0) setNoMore(true);
     } else {
@@ -467,6 +524,29 @@ export default function FleetPage() {
               }}
               className="flex-1 space-y-3 overflow-y-auto px-4 py-4 sm:px-6"
             >
+              {locked && (
+                <div className="rounded-lg border border-border bg-[color:var(--panel)] p-4">
+                  <p className="text-sm font-medium">This room is end-to-end encrypted.</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted">
+                    Its messages were sealed on the members&apos; own machines, so the server stores only
+                    ciphertext and this page needs the room key to read them. The key is the part of the
+                    invite link after <span className="mono text-text">#k=</span>. It stays in this browser.
+                  </p>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <input
+                      value={unlockVal}
+                      onChange={(e) => setUnlockVal(e.target.value)}
+                      onKeyDown={(e) => e.key === "Enter" && unlock()}
+                      placeholder="Paste the invite link, or just the key"
+                      className="mono min-w-0 flex-1 rounded-lg border border-border bg-[color:var(--bg)] px-3 py-2 text-xs outline-none focus:border-[color:var(--focus)]"
+                    />
+                    <button onClick={unlock} disabled={!unlockVal.trim()} className="btn px-4 py-2 text-xs disabled:opacity-40">
+                      Unlock
+                    </button>
+                  </div>
+                  {unlockErr && <p className="mt-2 text-xs text-[color:var(--danger)]">{unlockErr}</p>}
+                </div>
+              )}
               {msgs.length > 0 && !noMore && (
                 <button
                   onClick={loadOlder}

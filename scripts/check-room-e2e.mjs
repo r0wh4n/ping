@@ -85,4 +85,44 @@ assert.equal(keyFrom("tooshort"), null, "a short key is refused");
 assert.equal(keyFrom(""), null, "an empty key is refused");
 assert.equal(keyFrom(null), null, "a missing key is refused");
 
-console.log("check-room-e2e: all assertions passed");
+// Interop: Mission Control opens these in the browser with WebCrypto, from a
+// separate implementation. Two implementations of one envelope drift silently —
+// the page would just show ciphertext forever — so prove they agree here.
+// Node exposes the same globals (crypto.subtle, atob), so the browser module
+// runs as-is.
+const browser = await import("../src/lib/roomKeys.ts");
+const keyB64 = newRoomKey();
+const nodeKey = keyFrom(keyB64);
+const webKey = await browser.importRoomKey(keyB64);
+assert.ok(webKey, "the browser accepts a key the plugin minted");
+
+for (const text of ["hello from the plugin", "🔐 émoji ✓", "x".repeat(5000)]) {
+  assert.equal(await browser.openText(seal(text, nodeKey), webKey), text,
+    "the browser opens what the plugin sealed");
+}
+assert.equal(await browser.openText("a plain webhook line", webKey), "a plain webhook line",
+  "plaintext passes through in the browser too");
+assert.ok(browser.isSealed(seal("x", nodeKey)), "the browser recognises the envelope");
+const sealedX = seal("the wrong key must not open this", nodeKey);
+const wrongWebKey = await browser.importRoomKey(newRoomKey());
+assert.equal(await browser.openText(sealedX, wrongWebKey), sealedX,
+  "a wrong key in the browser yields the envelope, not plaintext");
+assert.equal(await browser.openText(sealedX, null), sealedX, "no key in the browser yields the envelope");
+assert.equal(await browser.importRoomKey("tooshort"), null, "the browser refuses a short key");
+assert.equal(await browser.importRoomKey(null), null, "the browser refuses a missing key");
+
+// The unlock box takes whichever of the two a person has to hand.
+assert.equal(browser.keyFromInput(`https://theping.chat/g/gk_abc#k=${keyB64}`), keyB64, "unlock accepts a link");
+assert.equal(browser.keyFromInput(` ${keyB64} `), keyB64, "unlock accepts a bare key");
+assert.equal(browser.keyFromInput("not a key"), null, "unlock rejects junk");
+
+// Mission Control decrypts whole timelines, titles included.
+const rows = await browser.openAll(
+  [{ text: seal("sealed", nodeKey), title: seal("a title", nodeKey) }, { text: "plain", title: null }],
+  webKey
+);
+assert.equal(rows[0].text, "sealed", "timeline text opens");
+assert.equal(rows[0].title, "a title", "timeline titles open");
+assert.equal(rows[1].text, "plain", "plaintext rows survive");
+
+console.log("check-room-e2e: all assertions passed (node + browser interop)");
