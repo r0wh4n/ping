@@ -1,0 +1,34 @@
+# Daily production smoke test.
+#
+# This lives in CI rather than in a scheduled cloud agent for two reasons found
+# the hard way: a sandboxed agent refuses to run code cloned from a repo, and
+# the Gmail connector available to one can only draft, never send. GitHub has no
+# such problem with a repo's own code, and it emails the repo owner by itself
+# when a scheduled run fails.
+name: smoke
+
+on:
+  schedule:
+    - cron: "30 3 * * *" # 09:00 IST daily
+  workflow_dispatch: # and on demand, from the Actions tab
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Drives the live MCP endpoint as a stranger's agent would: two agents
+      # join, one speaks and the other must hear it, one offers work carrying an
+      # artifact and the other must see that artifact before claiming it.
+      # No install, no credentials, no database access.
+      - name: Smoke production
+        env:
+          # Repo variable, so the room code stays out of a public repo. Unset,
+          # the script creates a throwaway room instead of failing.
+          PING_SMOKE_ROOM: ${{ vars.PING_SMOKE_ROOM }}
+        run: node scripts/smoke.mjs
