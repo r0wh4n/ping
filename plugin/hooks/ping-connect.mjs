@@ -18,6 +18,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
+import { keyFromLink, linkWithKey, newRoomKey } from "./ping-crypto.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -63,13 +64,15 @@ async function callApi(body) {
   try { return JSON.parse(out); } catch { return null; }
 }
 
-// Register the MCP server. The token goes in as its own argv element, so it is
-// never exposed to a shell — and never printed, so it stays out of the model's
-// transcript entirely.
-async function wireMcp(token) {
+// Register the MCP server. This is the local sealing proxy, not the hosted URL:
+// the room key lives on this machine, so the encryption has to happen here,
+// before anything is sent. The proxy reads the token and key from the state
+// file, so neither is passed on a command line or printed into the transcript.
+async function wireMcp() {
+  const server = new URL("./ping-mcp.mjs", import.meta.url).pathname;
   const args = [
-    "mcp", "add", "--transport", "http", "ping", "https://theping.chat/mcp",
-    "--header", `Authorization: Bearer ${token}`, "--scope", "user",
+    "mcp", "add", "--transport", "stdio", "ping", "--scope", "user",
+    "--", process.execPath, server,
   ];
   try {
     await execFileP("claude", args, { timeout: 30_000 });
@@ -87,6 +90,10 @@ async function wireMcp(token) {
 async function connect(mode, rest) {
   const name = await displayName();
   let res;
+  // The room key rides in the invite link's fragment, which is never sent to a
+  // server. Take it before the code goes anywhere; a link without one means the
+  // room predates encryption, or somebody shared only the part before the #.
+  let key = mode === "join" ? keyFromLink(rest) : newRoomKey();
   if (mode === "join") {
     const code = extractCode(rest);
     if (!code) die("That doesn't look like a Ping invite. Expected a link containing gk_… — check the link and try again.");
@@ -108,10 +115,11 @@ async function connect(mode, rest) {
   // across every project on this machine, so without a path this room's traffic
   // (and its write token) would be delivered into unrelated work.
   updateState((s) => upsertRoom(s, {
-    token: res.token, group, name, path: process.cwd(), last_seen: new Date().toISOString(),
+    token: res.token, group, name, key: key ?? undefined,
+    path: process.cwd(), last_seen: new Date().toISOString(),
   }));
 
-  const wired = await wireMcp(res.token);
+  const wired = await wireMcp();
 
   console.log(JSON.stringify({
     ok: true,
@@ -120,7 +128,12 @@ async function connect(mode, rest) {
     scoped_to: process.cwd(),
     mcp_registered: wired,
     rooms_watched: roomsOf(readState()).length,
-    invite_url: res.invite_url ?? null,
+    encrypted: Boolean(key),
+    encryption_note: key
+      ? "End-to-end encrypted. Everything written here is sealed on this machine first, so the server stores only ciphertext. The key is the part of the invite link after the # — share the whole link, and treat it like a password."
+      : "NOT end-to-end encrypted: this link carried no key, so the server can read this room. Ask whoever shared it for the full link including the part after the #.",
+    // The key is appended here, never server-side — the server is never told it.
+    invite_url: res.invite_url ? linkWithKey(res.invite_url, key) : null,
     webhook_url: res.webhook_url ?? null,
     // Only the creator gets a claim link, and only for a room they just made.
     // It carries the host token, so it proves ownership the way the shareable

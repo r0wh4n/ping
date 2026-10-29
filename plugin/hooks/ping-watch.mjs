@@ -21,6 +21,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
+import { keyFrom, open } from "./ping-crypto.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -107,7 +108,12 @@ async function main() {
       changed = true;
       continue;
     }
-    const fresh = msgs.filter((m) => m && m.mine === false && (m.created_at || "") > room.last_seen);
+    // Open before anything reads the text: the @mention check and the injected
+    // lines both need the plaintext, and the server only ever had ciphertext.
+    const key = keyFrom(room.key);
+    const fresh = msgs
+      .filter((m) => m && m.mine === false && (m.created_at || "") > room.last_seen)
+      .map((m) => (key ? { ...m, text: open(m.text, key) } : m));
     if (fresh.length) {
       next[i].last_seen = fresh.reduce((a, m) => (m.created_at > a ? m.created_at : a), room.last_seen);
       changed = true;
