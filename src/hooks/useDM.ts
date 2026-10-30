@@ -5,6 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { cleanText } from "@/lib/profanity";
 import { getIdentity, encryptFor, decryptFrom } from "@/lib/crypto";
+import { compressVideo } from "@/lib/compressVideo";
 import type { Profile } from "@/hooks/useProfile";
 
 export type Reaction = { emoji: string; mine: boolean };
@@ -48,7 +49,12 @@ const VIDEO_EXT: Record<string, string> = {
   "video/webm": "webm",
   "video/quicktime": "mov",
 };
-const MAX_SNAP_BYTES = 50 * 1024 * 1024;
+// What the dm-media bucket itself accepts — raising this alone changes nothing.
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
+// What the picker accepts for video. Bigger than the bucket on purpose:
+// compressVideo re-encodes on the way out, so a 100 MB phone clip lands as a
+// few MB. If compression can't run, the upload cap below still applies.
+const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 // Android gallery pickers hand back files with an empty or vendor-specific
 // type often enough to matter; the bucket only accepts a known list, so an
 // unnamed .mp4 would fail the upload. Fall back to the extension.
@@ -622,14 +628,34 @@ export function useDM(profile: Profile | null, friendUsername: string) {
   // rendered by the <video> branch the saved-snap path already uses; the
   // bucket has allowed video/* up to 50 MB since snaps shipped.
   const sendMedia = useCallback(
-    async (file: File, replyToId?: string | null): Promise<{ ok: boolean; error?: string }> => {
+    async (
+      picked: File,
+      replyToId?: string | null,
+      onProgress?: (fraction: number) => void
+    ): Promise<{ ok: boolean; error?: string }> => {
       if (!me || !friendId.current) return { ok: false, error: "Not ready." };
-      const type = typeOf(file);
+      let file = picked;
+      let type = typeOf(file);
+
+      if (VIDEO_EXT[type]) {
+        if (file.size > MAX_VIDEO_BYTES) return { ok: false, error: "Video must be under 100 MB." };
+        const small = await compressVideo(file, onProgress);
+        if (small) {
+          file = small;
+          type = small.type;
+        }
+        // Compression is best-effort: an undecodable file, or a browser without
+        // MediaRecorder, lands here with the original still in hand.
+        if (file.size > MAX_UPLOAD_BYTES) return { ok: false, error: "Couldn't shrink that one enough — try a shorter clip." };
+      } else if (!EXT[type]) {
+        return { ok: false, error: "Photos (PNG, JPG, WEBP, GIF) or video (MP4, MOV, WEBM)." };
+      } else if (file.size > MAX_IMAGE_BYTES) {
+        return { ok: false, error: "Image must be under 8 MB." };
+      }
+
       const vext = VIDEO_EXT[type];
       const ext = vext ?? EXT[type];
       if (!ext) return { ok: false, error: "Photos (PNG, JPG, WEBP, GIF) or video (MP4, MOV, WEBM)." };
-      const cap = vext ? MAX_SNAP_BYTES : MAX_IMAGE_BYTES;
-      if (file.size > cap) return { ok: false, error: `${vext ? "Video" : "Image"} must be under ${cap / 1024 / 1024} MB.` };
 
       const [ua, ub] = [me, friendId.current].sort();
       const path = `${ua}_${ub}/${crypto.randomUUID()}.${ext}`;
@@ -730,7 +756,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
       const isVideo = file.type.startsWith("video/");
       const isImage = file.type.startsWith("image/");
       if (!isVideo && !isImage) return { ok: false, error: "Pick a photo or video." };
-      if (file.size > MAX_SNAP_BYTES) return { ok: false, error: "Snap must be under 50 MB." };
+      if (file.size > MAX_UPLOAD_BYTES) return { ok: false, error: "Snap must be under 50 MB." };
       const ext = isVideo ? VIDEO_EXT[file.type] ?? "mp4" : EXT[file.type] ?? "jpg";
       const [ua, ub] = [me, friendId.current].sort();
       const path = `${ua}_${ub}/${crypto.randomUUID()}.${ext}`;

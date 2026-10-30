@@ -177,6 +177,7 @@ export default function DMPage() {
   const [activeMsg, setActiveMsg] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<DMsg | null>(null);
   const [uploading, setUploading] = useState(false);
+  const [prep, setPrep] = useState<number | null>(null); // video compression, 0-100
   const [imgErr, setImgErr] = useState<string | null>(null);
   // Snap (view-once media) viewer overlay + hidden picker.
   const [snapView, setSnapView] = useState<{ url: string; kind: "image" | "video" } | null>(null);
@@ -327,7 +328,10 @@ export default function DMPage() {
     if (!file) return;
     setUploading(true);
     setImgErr(null);
-    const res = await sendMedia(file, replyTo?.id);
+    // Compression runs in real time, so a long clip sits here a while — show
+    // the percentage rather than an ellipsis that looks stuck.
+    const res = await sendMedia(file, replyTo?.id, (f) => setPrep(Math.round(f * 100)));
+    setPrep(null);
     if (!res.ok) setImgErr(res.error ?? "Couldn't send that.");
     else setReplyTo(null);
     setUploading(false);
@@ -945,7 +949,7 @@ export default function DMPage() {
             aria-label="Send a photo or video"
             className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
           >
-            {uploading ? "…" : <CameraIcon />}
+            {prep !== null ? <span className="mono text-[11px] tabular-nums">{prep}%</span> : uploading ? "…" : <CameraIcon />}
           </button>
           <button
             onClick={startRec}

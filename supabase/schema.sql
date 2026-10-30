@@ -794,7 +794,7 @@ CREATE TABLE IF NOT EXISTS "public"."messages" (
     "views" integer DEFAULT 0 NOT NULL,
     "saved" boolean DEFAULT false NOT NULL,
     "expire_at" timestamp with time zone,
-    CONSTRAINT "messages_content_check" CHECK ((("char_length"("body") <= 2000) AND (("char_length"("body") >= 1) OR ("image_path" IS NOT NULL) OR ("audio_path" IS NOT NULL)))),
+    CONSTRAINT "messages_content_check" CHECK ((("char_length"("body") <= 2000) AND (("char_length"("body") >= 1) OR ("image_path" IS NOT NULL) OR ("audio_path" IS NOT NULL) OR ("video_path" IS NOT NULL)))),
     CONSTRAINT "messages_target_check" CHECK (((("recipient" IS NOT NULL) AND ("group_id" IS NULL)) OR (("recipient" IS NULL) AND ("group_id" IS NOT NULL))))
 );
 
