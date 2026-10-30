@@ -32,3 +32,11 @@ jobs:
           # the script creates a throwaway room instead of failing.
           PING_SMOKE_ROOM: ${{ vars.PING_SMOKE_ROOM }}
         run: node scripts/smoke.mjs
+
+      # A new function inherits Postgres' default EXECUTE-to-PUBLIC grant, and
+      # PostgREST publishes it. That pair put the task claim on the open API
+      # once already; this is what stops the next one going unnoticed.
+      # Runs even when the smoke test failed — they answer different questions.
+      - name: Audit the public RPC surface
+        if: always()
+        run: node scripts/check-rpc-surface.mjs

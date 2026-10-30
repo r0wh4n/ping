@@ -14,7 +14,8 @@
     "test:e2e": "npx playwright test call.e2e",
     "smoke": "node scripts/smoke.mjs",
     "deploy:staging": "./scripts/deploy.sh staging",
-    "deploy:prod": "./scripts/deploy.sh prod"
+    "deploy:prod": "./scripts/deploy.sh prod",
+    "check:rpc": "node scripts/check-rpc-surface.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.8",

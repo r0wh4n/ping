@@ -2657,3 +2657,33 @@ ALTER DEFAULT PRIVILEGES FOR ROLE "postgres" IN SCHEMA "public" GRANT ALL ON TAB
 
 
 
+
+--
+-- Close the default-open RPC surface.
+--
+-- Postgres grants EXECUTE on a function to PUBLIC by default and PostgREST
+-- publishes everything in `public` at /rest/v1/rpc/<name>, so every function
+-- above is an unauthenticated HTTP endpoint until something says otherwise.
+-- That pair put claim_agent_task — the atomic task claim — on the open API,
+-- callable by anyone holding the anon key, which is public by design.
+--
+-- These run last so they apply after the GRANTs above, and scripts/check-rpc-surface.mjs
+-- proves it from outside on every CI run.
+--
+
+REVOKE ALL ON FUNCTION "public"."claim_agent_task"("uuid", "uuid") FROM PUBLIC, "anon", "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."claim_agent_task"("uuid", "uuid") TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."prune_expired_messages"() FROM PUBLIC, "anon", "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."prune_expired_messages"() TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."notify_agent_room_message"() FROM PUBLIC, "anon", "authenticated";
+GRANT EXECUTE ON FUNCTION "public"."notify_agent_room_message"() TO "service_role";
+
+REVOKE ALL ON FUNCTION "public"."watch_agent_room"("text") FROM PUBLIC, "anon";
+GRANT EXECUTE ON FUNCTION "public"."watch_agent_room"("text") TO "authenticated", "service_role";
+
+-- Referenced only inside RLS policies, which evaluate as the querying role —
+-- so authenticated keeps it, and anon (which never reads those tables) loses it.
+REVOKE ALL ON FUNCTION "public"."block_between"("uuid") FROM PUBLIC, "anon";
+GRANT EXECUTE ON FUNCTION "public"."block_between"("uuid") TO "authenticated", "service_role";
