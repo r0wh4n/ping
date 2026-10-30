@@ -51,12 +51,13 @@ const VIDEO_EXT: Record<string, string> = {
 const MAX_SNAP_BYTES = 50 * 1024 * 1024;
 const SNAP_TTL = 120; // signed-URL lifetime when opening a snap (seconds)
 
-const snippetOf = (body: string, image_path?: string | null, audio_path?: string | null) => {
-  if (body) return cleanText(body).slice(0, 80);
-  if (image_path) return "📷 Photo";
-  if (audio_path) return "🎙 Voice message";
-  return "";
-};
+// One label for a bodyless message, whether the caller holds raw paths or a
+// built DMsg — three copies of this had already drifted apart.
+const mediaLabel = (image?: unknown, audio?: unknown, video?: unknown) =>
+  image ? "📷 Photo" : video ? "🎞 Video" : audio ? "🎙 Voice message" : "";
+
+const snippetOf = (body: string, image_path?: string | null, audio_path?: string | null, video_path?: string | null) =>
+  body ? cleanText(body).slice(0, 80) : mediaLabel(image_path, audio_path, video_path);
 
 // One reaction per person per message (iMessage-style). Replace this side's.
 const setReaction = (list: Reaction[], mine: boolean, emoji: string | null): Reaction[] => {
@@ -69,7 +70,7 @@ const replyFromParent = (parent: DMsg | undefined): ReplyPreview | null =>
   parent
     ? {
         fromMe: parent.mine,
-        snippet: parent.image && !parent.body ? "📷 Photo" : parent.audio && !parent.body ? "🎙 Voice message" : parent.body.slice(0, 80),
+        snippet: parent.body ? parent.body.slice(0, 80) : mediaLabel(parent.image, parent.audio, parent.video),
       }
     : null;
 
@@ -158,7 +159,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
         ephemeral: false,
         image: await signPath(r.image_path),
         audio: await signPath(r.audio_path),
-        video: null,
+        video: await signPath(r.video_path),
         audioSecs: r.audio_secs ? Number(r.audio_secs) : undefined,
       };
     },
@@ -405,7 +406,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
             reply: parent
               ? {
                   fromMe: parent.sender === me,
-                  snippet: snippetOf(decoded.get(String(parent.id)) ?? "", parent.image_path, parent.audio_path),
+                  snippet: snippetOf(decoded.get(String(parent.id)) ?? "", parent.image_path, parent.audio_path, parent.video_path),
                 }
               : null,
             reactions: reactMap.get(String(m.id)) ?? [],
@@ -556,7 +557,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
     const parent = msgsRef.current.find((m) => m.id === replyToId);
     if (!parent) return null;
     const authorId = parent.mine ? me : friendId.current;
-    const snippet = parent.image && !parent.body ? "📷 Photo" : parent.body.slice(0, 80);
+    const snippet = parent.body ? parent.body.slice(0, 80) : mediaLabel(parent.image, parent.audio, parent.video);
     return { authorId, snippet };
   }, [me]);
 
@@ -604,26 +605,33 @@ export function useDM(profile: Profile | null, friendUsername: string) {
     [me, replyMeta, nudgeUnread]
   );
 
-  const sendImage = useCallback(
+  // Photo or video, from the same picker. Video lands in video_path and is
+  // rendered by the <video> branch the saved-snap path already uses; the
+  // bucket has allowed video/* up to 50 MB since snaps shipped.
+  const sendMedia = useCallback(
     async (file: File, replyToId?: string | null): Promise<{ ok: boolean; error?: string }> => {
       if (!me || !friendId.current) return { ok: false, error: "Not ready." };
-      if (!EXT[file.type]) return { ok: false, error: "Only PNG, JPG, WEBP or GIF." };
-      if (file.size > MAX_IMAGE_BYTES) return { ok: false, error: "Image must be under 8 MB." };
+      const vext = VIDEO_EXT[file.type];
+      const ext = vext ?? EXT[file.type];
+      if (!ext) return { ok: false, error: "Photos (PNG, JPG, WEBP, GIF) or video (MP4, MOV, WEBM)." };
+      const cap = vext ? MAX_SNAP_BYTES : MAX_IMAGE_BYTES;
+      if (file.size > cap) return { ok: false, error: `${vext ? "Video" : "Image"} must be under ${cap / 1024 / 1024} MB.` };
 
       const [ua, ub] = [me, friendId.current].sort();
-      const path = `${ua}_${ub}/${crypto.randomUUID()}.${EXT[file.type]}`;
+      const path = `${ua}_${ub}/${crypto.randomUUID()}.${ext}`;
       const up = await supabase.storage.from("dm-media").upload(path, file, { contentType: file.type });
       if (up.error) return { ok: false, error: "Upload failed. Try again." };
 
+      const col = vext ? { video_path: path } : { image_path: path };
       const meta = replyMeta(replyToId);
       const { data, error } = await supabase
         .from("messages")
-        .insert({ sender: me, recipient: friendId.current, body: "", image_path: path, reply_to: replyToId ?? null })
+        .insert({ sender: me, recipient: friendId.current, body: "", ...col, reply_to: replyToId ?? null })
         .select()
         .single();
-      if (error || !data) return { ok: false, error: "Couldn't send the photo." };
+      if (error || !data) return { ok: false, error: `Couldn't send the ${vext ? "video" : "photo"}.` };
 
-      const image = await signPath(path);
+      const url = await signPath(path);
       setMessages((m) => [
         ...m,
         {
@@ -631,7 +639,8 @@ export function useDM(profile: Profile | null, friendUsername: string) {
           mine: true,
           body: "",
           created_at: String(data.created_at),
-          image,
+          image: vext ? null : url,
+          video: vext ? url : null,
           reply: meta ? { fromMe: meta.authorId === me, snippet: meta.snippet } : null,
           reactions: [],
         },
@@ -643,7 +652,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
           id: data.id,
           sender: me,
           body: "",
-          image_path: path,
+          ...col,
           created_at: data.created_at,
           reply: replyToId ? { id: replyToId } : null,
         },
@@ -1000,7 +1009,7 @@ export function useDM(profile: Profile | null, friendUsername: string) {
     pinnedId,
     scheduled,
     send,
-    sendImage,
+    sendMedia,
     sendVoice,
     sendSnap,
     openSnap,

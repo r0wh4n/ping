@@ -153,7 +153,7 @@ export default function DMPage() {
     pinnedId,
     scheduled,
     send,
-    sendImage,
+    sendMedia,
     sendVoice,
     sendSnap,
     openSnap,
@@ -321,14 +321,14 @@ export default function DMPage() {
     setReplyTo(null);
   };
 
-  const onPickImage = async (e: ChangeEvent<HTMLInputElement>) => {
+  const onPickMedia = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
     if (!file) return;
     setUploading(true);
     setImgErr(null);
-    const res = await sendImage(file, replyTo?.id);
-    if (!res.ok) setImgErr(res.error ?? "Couldn't send photo.");
+    const res = await sendMedia(file, replyTo?.id);
+    if (!res.ok) setImgErr(res.error ?? "Couldn't send that.");
     else setReplyTo(null);
     setUploading(false);
   };
@@ -570,7 +570,7 @@ export default function DMPage() {
       {pinnedId && (() => {
         const pin = messages.find((x) => x.id === pinnedId);
         const label = pin
-          ? pin.body || (pin.image ? "Photo" : pin.audio ? "Voice note" : "Message")
+          ? pin.body || (pin.image ? "Photo" : pin.video ? "Video" : pin.audio ? "Voice note" : "Message")
           : "Pinned message";
         return (
           <div className="flex shrink-0 items-center gap-3 border-b border-border bg-[color:var(--panel)] px-4 py-2">
@@ -669,6 +669,7 @@ export default function DMPage() {
                   src={m.video}
                   controls
                   playsInline
+                  preload="metadata"
                   className="max-h-72 w-auto rounded-2xl border border-border"
                 />
               </div>
@@ -893,10 +894,10 @@ export default function DMPage() {
           )}
           <input
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif"
+            accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
             ref={fileRef}
             className="hidden"
-            onChange={onPickImage}
+            onChange={onPickMedia}
           />
           <input
             type="file"
@@ -937,8 +938,8 @@ export default function DMPage() {
           <button
             onClick={() => fileRef.current?.click()}
             disabled={status !== "ready" || uploading}
-            title="Send a photo"
-            aria-label="Send a photo"
+            title="Send a photo or video"
+            aria-label="Send a photo or video"
             className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
           >
             {uploading ? "…" : <CameraIcon />}
