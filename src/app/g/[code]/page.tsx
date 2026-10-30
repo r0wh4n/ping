@@ -179,7 +179,9 @@ export default function JoinGroupPage() {
               </p>
 
               <div className="mt-6">
-                <ConnectAI token={joined.token} />
+                {/* The current URL still carries the key in its fragment, which
+                    is how the panel knows this room is encrypted. */}
+                <ConnectAI token={joined.token} link={typeof window === "undefined" ? undefined : window.location.href} />
               </div>
 
               <details className="mt-5 text-xs text-[color:var(--faint)]">

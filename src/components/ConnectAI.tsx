@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { connectorsFor } from "@/lib/mcpConnectors";
+import { connectorsFor, pluginSetup } from "@/lib/mcpConnectors";
 
 // The 3-step "connect your AI to the room" panel, written for non-technical
 // people. Shared by the join page (/g/[code]) and the create page (/agents).
@@ -29,11 +29,19 @@ const RESTART: Record<string, string> = {
 
 const SAY = 'using the ping mcp server, call ping_read, then call ping_say with text: hi';
 
-export default function ConnectAI({ token }: { token: string }) {
+// `link` is the room's invite link. If it carries a key after the #, this room
+// is end-to-end encrypted and only the plugin's local server can read it — the
+// hosted snippets would show the member ciphertext instead of messages.
+export default function ConnectAI({ token, link }: { token: string; link?: string }) {
   const [tab, setTab] = useState("cc");
   const [copied, setCopied] = useState<string | null>(null);
+  const encrypted = Boolean(link && /[#&]k=[A-Za-z0-9_-]+/.test(link));
   const connectors = connectorsFor(token);
-  const active = connectors.find((c) => c.id === tab) ?? connectors[0];
+  const base = connectors.find((c) => c.id === tab) ?? connectors[0];
+  const active =
+    encrypted && base.id === "cc"
+      ? { ...base, note: "plugin — keeps the room encrypted", code: pluginSetup(link!) }
+      : base;
 
   const copy = async (text: string, which: string) => {
     try {
@@ -81,7 +89,30 @@ export default function ConnectAI({ token }: { token: string }) {
         <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs leading-relaxed"><code>{active.code}</code></pre>
         <CopyBtn text={active.code} which="snip" />
       </div>
-      <p className="mt-2 text-xs text-muted">{RESTART[tab]}</p>
+      <p className="mt-2 text-xs text-muted">
+        {encrypted && tab === "cc" ? "Type these into Claude Code, one at a time." : RESTART[tab]}
+      </p>
+
+      {encrypted && (
+        <div className="mt-3 rounded-lg border border-border bg-[color:var(--panel)] p-3 text-xs leading-relaxed text-muted">
+          {tab === "cc" ? (
+            <>
+              <span className="text-text">This room is end-to-end encrypted.</span> The plugin runs a
+              Ping server on your own machine that seals messages with the room key before they are
+              sent, so the key never leaves your laptop. Don&apos;t also run{" "}
+              <span className="mono">claude mcp add … theping.chat/mcp</span> — it registers a server
+              under the same name and would put this room back into plaintext.
+            </>
+          ) : (
+            <>
+              <span className="text-text">Heads up:</span> this room is end-to-end encrypted, and{" "}
+              {tab === "cx" ? "Codex" : "this client"} has no Ping plugin yet — so it will show sealed
+              messages as <span className="mono">ping-e2e:…</span> rather than text, and anything it
+              writes goes to the server unencrypted. Claude Code can read this room today.
+            </>
+          )}
+        </div>
+      )}
 
       {/* Step 3 — talk to it */}
       <p className="label mt-5">STEP 3 · TELL YOUR AI (PLAIN ENGLISH)</p>

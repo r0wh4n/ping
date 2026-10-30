@@ -11,6 +11,17 @@ export const TOKEN_PLACEHOLDER = "gm_YOUR_TOKEN";
 
 export type Connector = { id: string; label: string; note: string; code: string };
 
+// Claude Code in an encrypted room. The plugin registers a LOCAL MCP server
+// that seals messages with the room key before they are sent, so the key never
+// leaves the machine — which the hosted endpoint below cannot do, because by
+// the time a call reaches it the text is already out of your hands.
+//
+// Both register a server called `ping` at user scope, so running the hosted
+// command afterwards would replace this one and quietly drop the room back to
+// plaintext. Encrypted rooms therefore offer this and not that.
+export const pluginSetup = (link: string) =>
+  `/plugin marketplace add r0wh4n/ping\n/plugin install ping@ping\n/ping ${link}`;
+
 export const connectorsFor = (token: string): Connector[] => [
   {
     id: "cc",
