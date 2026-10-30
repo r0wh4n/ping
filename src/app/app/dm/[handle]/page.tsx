@@ -66,6 +66,10 @@ function VoicePlayer({ src, secs, mine }: { src: string; secs?: number; mine: bo
   const [playing, setPlaying] = useState(false);
   const [cur, setCur] = useState(0);
   const [dur, setDur] = useState(secs ?? 0);
+  const [rate, setRate] = useState(1);
+  // A codec the browser can't decode fires `play` and then errors, which looked
+  // exactly like playing silently. Say so instead.
+  const [dead, setDead] = useState(false);
   const remaining = Math.max(0, Math.round((dur || secs || 0) - cur));
   const pct = dur ? Math.min(100, (cur / dur) * 100) : 0;
   const toggle = (e: MouseEvent) => {
@@ -73,7 +77,13 @@ function VoicePlayer({ src, secs, mine }: { src: string; secs?: number; mine: bo
     const a = ref.current;
     if (!a) return;
     if (playing) a.pause();
-    else a.play();
+    else a.play().catch(() => setDead(true));
+  };
+  const cycleRate = (e: MouseEvent) => {
+    e.stopPropagation();
+    const next = rate === 1 ? 1.5 : rate === 1.5 ? 2 : 1;
+    setRate(next);
+    if (ref.current) ref.current.playbackRate = next;
   };
   return (
     <div
@@ -90,10 +100,18 @@ function VoicePlayer({ src, secs, mine }: { src: string; secs?: number; mine: bo
       >
         {playing ? "❚❚" : "▶"}
       </button>
-      <div className={`h-1 w-28 overflow-hidden rounded-full ${mine ? "bg-[color:var(--bubble-out-fg)]/20" : "bg-[color:var(--muted)]/25"}`}>
+      <div className={`h-1 w-24 overflow-hidden rounded-full ${mine ? "bg-[color:var(--bubble-out-fg)]/20" : "bg-[color:var(--muted)]/25"}`}>
         <div className={`h-full rounded-full ${mine ? "bg-[color:var(--bubble-out-fg)]/70" : "bg-[color:var(--muted)]"}`} style={{ width: `${pct}%` }} />
       </div>
-      <span className="mono text-xs tabular-nums opacity-80">{mmss(remaining)}</span>
+      <span className="mono text-xs tabular-nums opacity-80">{dead ? "can't play" : mmss(remaining)}</span>
+      {/* Tap to cycle 1× → 1.5× → 2×. Per note, not remembered across them. */}
+      <button
+        onClick={cycleRate}
+        aria-label={`Playback speed ${rate}×`}
+        className="mono shrink-0 rounded-full px-1 text-[11px] tabular-nums opacity-70"
+      >
+        {rate}×
+      </button>
       <audio
         ref={ref}
         src={src}
@@ -101,6 +119,11 @@ function VoicePlayer({ src, secs, mine }: { src: string; secs?: number; mine: bo
         onLoadedMetadata={(e) => {
           const d = e.currentTarget.duration;
           if (isFinite(d) && d > 0) setDur(d);
+          e.currentTarget.playbackRate = rate;
+        }}
+        onError={() => {
+          setPlaying(false);
+          setDead(true);
         }}
         onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
         onPlay={() => setPlaying(true)}
@@ -233,7 +256,13 @@ export default function DMPage() {
   const cancelledRec = useRef(false);
 
   const pickMime = () => {
-    const cands = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4", "audio/ogg"];
+    // AAC-in-MP4 first: WebKit (every iOS browser, Brave included) cannot
+    // decode WebM/Opus, so a webm note is silent on every iPhone — the player
+    // flips to "playing" and nothing comes out. Chrome and Safari both record
+    // AAC, which plays everywhere. Name the codec: bare audio/mp4 can hand
+    // back Opus-in-MP4, which iOS can't decode either. webm stays as the
+    // Firefox fallback.
+    const cands = ["audio/mp4;codecs=mp4a.40.2", "audio/mp4", "audio/webm;codecs=opus", "audio/webm", "audio/ogg"];
     for (const c of cands) if (typeof MediaRecorder !== "undefined" && MediaRecorder.isTypeSupported(c)) return c;
     return "";
   };
