@@ -894,7 +894,10 @@ export default function DMPage() {
           )}
           <input
             type="file"
-            accept="image/png,image/jpeg,image/webp,image/gif,video/mp4,video/quicktime,video/webm"
+            // Photo types stay explicit on purpose: iOS transcodes HEIC to JPEG
+            // only when the list names jpeg. video/* is a wildcard so nothing in
+            // the library shows up greyed out.
+            accept="image/png,image/jpeg,image/webp,image/gif,video/*"
             ref={fileRef}
             className="hidden"
             onChange={onPickMedia}

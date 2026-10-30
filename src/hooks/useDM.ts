@@ -49,6 +49,19 @@ const VIDEO_EXT: Record<string, string> = {
   "video/quicktime": "mov",
 };
 const MAX_SNAP_BYTES = 50 * 1024 * 1024;
+// Android gallery pickers hand back files with an empty or vendor-specific
+// type often enough to matter; the bucket only accepts a known list, so an
+// unnamed .mp4 would fail the upload. Fall back to the extension.
+const typeOf = (f: File) =>
+  f.type && (EXT[f.type] || VIDEO_EXT[f.type])
+    ? f.type
+    : /\.mp4$|\.m4v$/i.test(f.name)
+      ? "video/mp4"
+      : /\.mov$/i.test(f.name)
+        ? "video/quicktime"
+        : /\.webm$/i.test(f.name)
+          ? "video/webm"
+          : f.type;
 const SNAP_TTL = 120; // signed-URL lifetime when opening a snap (seconds)
 
 // One label for a bodyless message, whether the caller holds raw paths or a
@@ -611,15 +624,16 @@ export function useDM(profile: Profile | null, friendUsername: string) {
   const sendMedia = useCallback(
     async (file: File, replyToId?: string | null): Promise<{ ok: boolean; error?: string }> => {
       if (!me || !friendId.current) return { ok: false, error: "Not ready." };
-      const vext = VIDEO_EXT[file.type];
-      const ext = vext ?? EXT[file.type];
+      const type = typeOf(file);
+      const vext = VIDEO_EXT[type];
+      const ext = vext ?? EXT[type];
       if (!ext) return { ok: false, error: "Photos (PNG, JPG, WEBP, GIF) or video (MP4, MOV, WEBM)." };
       const cap = vext ? MAX_SNAP_BYTES : MAX_IMAGE_BYTES;
       if (file.size > cap) return { ok: false, error: `${vext ? "Video" : "Image"} must be under ${cap / 1024 / 1024} MB.` };
 
       const [ua, ub] = [me, friendId.current].sort();
       const path = `${ua}_${ub}/${crypto.randomUUID()}.${ext}`;
-      const up = await supabase.storage.from("dm-media").upload(path, file, { contentType: file.type });
+      const up = await supabase.storage.from("dm-media").upload(path, file, { contentType: type });
       if (up.error) return { ok: false, error: "Upload failed. Try again." };
 
       const col = vext ? { video_path: path } : { image_path: path };
