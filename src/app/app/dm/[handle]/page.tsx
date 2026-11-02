@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ChangeEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type MouseEvent } from "react";
 import { useProfile } from "@/hooks/useProfile";
 import { useDM, type DMsg } from "@/hooks/useDM";
 import { fmtTime } from "@/lib/time";
@@ -325,7 +325,20 @@ export default function DMPage() {
   const onPickMedia = async (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = "";
-    if (!file) return;
+    if (file) sendFile(file);
+  };
+
+  // Cmd/Ctrl-V in the message field. A screenshot arrives as a File on the
+  // clipboard, so it takes the same road as a picked one; a text paste has no
+  // files and is left to the input.
+  const onPasteMedia = (e: ClipboardEvent<HTMLInputElement>) => {
+    const file = e.clipboardData?.files?.[0];
+    if (!file || uploading) return;
+    e.preventDefault();
+    sendFile(file);
+  };
+
+  const sendFile = async (file: File) => {
     setUploading(true);
     setImgErr(null);
     // Compression runs in real time, so a long clip sits here a while — show
@@ -935,6 +948,7 @@ export default function DMPage() {
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
             onKeyDown={(e) => e.key === "Enter" && onSend()}
+            onPaste={onPasteMedia}
             disabled={status !== "ready"}
             maxLength={2000}
             placeholder={status === "ready" ? "Message @" + handle + "…" : "…"}
