@@ -37,12 +37,17 @@ if [ "$ENV" = "prod" ]; then
   [ "$confirm" = "prod" ] || { echo "Stopped."; exit 1; }
 fi
 
+# Pinned to a major. A bare `npx supabase` silently jumped 2 -> 3 mid-deploy and
+# broke two things at once: `db push` started defaulting to the LOCAL stack, and
+# the dry-run below stopped emitting JSON. Deploys do not get to change under us.
+SUPA="npx --yes supabase@3"
+
 echo "==> [1/4] Local checks"
 npm run check
 
 echo "==> [2/4] Migrations to $ENV"
 # Nothing below this line runs if a migration fails: that is the whole mechanism.
-npx supabase db push --project-ref "$SUPABASE_PROJECT_REF"
+$SUPA db push --project-ref "$SUPABASE_PROJECT_REF"
 
 echo "==> [3/4] Verifying the schema actually took"
 # "db push exited 0" is not the same as "the column is there" — a push that
@@ -63,12 +68,19 @@ fi
 # burned us — is every local migration recorded as applied on the remote? — and
 # answers it in seconds. Swap in a real diff if someone starts editing prod by
 # hand.
-if ! npx supabase db push --project-ref "$SUPABASE_PROJECT_REF" --dry-run > /tmp/ping-migration-state.json 2>/tmp/ping-migration-state.err; then
+#
+# --output-format json is NOT optional here. Without it the CLI picks its own
+# shape per context: the same command printed JSON to a pipe and the bare
+# sentence "Remote database is up to date." to a file, so this grep missed and
+# the gate blocked a deploy whose migration had just applied cleanly. Ask for
+# the machine-readable form; accept the sentence too, so an older CLI that has
+# no such flag still passes instead of failing closed on a healthy schema.
+if ! $SUPA db push --project-ref "$SUPABASE_PROJECT_REF" --dry-run --output-format json > /tmp/ping-migration-state.json 2>/tmp/ping-migration-state.err; then
   echo "Could not read remote migration state — not deploying functions blind:" >&2
   tail -5 /tmp/ping-migration-state.err >&2
   exit 1
 fi
-if ! grep -q '"upToDate":true' /tmp/ping-migration-state.json; then
+if ! grep -qE '"upToDate":[[:space:]]*true|^Remote database is up to date\.$' /tmp/ping-migration-state.json; then
   echo "The remote database is missing migrations this code expects:" >&2
   cat /tmp/ping-migration-state.json >&2
   echo "Refusing to deploy functions against a schema that is not what this code expects." >&2
@@ -78,7 +90,7 @@ fi
 echo "==> [4/4] Edge functions to $ENV"
 for fn in group-api group-hook send-push; do
   echo "    - $fn"
-  npx supabase functions deploy "$fn" --project-ref "$SUPABASE_PROJECT_REF"
+  $SUPA functions deploy "$fn" --project-ref "$SUPABASE_PROJECT_REF"
 done
 
 echo
