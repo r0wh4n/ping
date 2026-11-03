@@ -87,8 +87,27 @@ async function wireMcp() {
   }
 }
 
-async function connect(mode, rest) {
-  const name = await displayName();
+// `/ping join <link> --name "Rohan" --role backend`. The command asks the
+// person for both, because the agent is where they already are — a web form
+// they never opened can't. git config is the fallback for an unattended run.
+function takeFlags(rest) {
+  const flags = {};
+  const words = [];
+  const parts = String(rest || "").match(/"[^"]*"|\S+/g) ?? [];
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i];
+    const m = p.match(/^--(name|role)$/);
+    if (m && parts[i + 1]) {
+      flags[m[1]] = parts[++i].replace(/^"|"$/g, "");
+    } else words.push(p);
+  }
+  return { flags, rest: words.join(" ") };
+}
+
+async function connect(mode, restRaw) {
+  const { flags, rest } = takeFlags(restRaw);
+  const name = (flags.name || "").trim().slice(0, 40) || (await displayName());
+  const role = (flags.role || "").trim().toLowerCase() || undefined;
   let res;
   // The room key rides in the invite link's fragment, which is never sent to a
   // server. Take it before the code goes anywhere; a link without one means the
@@ -97,11 +116,11 @@ async function connect(mode, rest) {
   if (mode === "join") {
     const code = extractCode(rest);
     if (!code) die("That doesn't look like a Ping invite. Expected a link containing gk_… — check the link and try again.");
-    res = await callApi({ action: "join", link: code, name });
+    res = await callApi({ action: "join", link: code, name, role });
   } else {
     const group = String(rest || "").trim().slice(0, 80);
     if (!group) die("Give the room a name:  /ping new <group name>");
-    res = await callApi({ action: "create_group", name: group, host_name: name });
+    res = await callApi({ action: "create_group", name: group, host_name: name, role });
   }
 
   if (!res) die("Couldn't reach Ping. Check your connection and try again.");
@@ -124,6 +143,9 @@ async function connect(mode, rest) {
   console.log(JSON.stringify({
     ok: true,
     connected_as: name,
+    role: res.your_role ?? null,
+    ...(res.role_note ? { role_note: res.role_note } : {}),
+    owner: res.owner === true,
     active_room: group,
     scoped_to: process.cwd(),
     mcp_registered: wired,
@@ -146,6 +168,27 @@ async function connect(mode, rest) {
 async function main() {
   const [mode, ...rest] = process.argv.slice(2);
   const arg = rest.join(" ");
+
+  // Automatic activity updates, off by default. On, every time the agent goes
+  // idle the Stop hook reads the session transcript and logs one line — files
+  // edited, commands run, commits made — to the ACTIVE room, at most once every
+  // ten minutes. It never sends file contents, tool output or what you typed.
+  if (mode === "status") {
+    const on = arg.trim().toLowerCase() === "on";
+    const off = arg.trim().toLowerCase() === "off";
+    if (!on && !off) die("Usage:  /ping status on   |   /ping status off");
+    updateState((s) => ({ ...s, status: on }));
+    const room = readState().active;
+    console.log(JSON.stringify({
+      ok: true,
+      status: on,
+      room: room ?? null,
+      note: on
+        ? `Auto-updates on. When this agent goes idle it will log what it did — files edited, commands run, commits — to "${room ?? "your active room"}", at most once every 10 minutes. Nothing you type and no file contents are sent. Turn off with /ping status off.`
+        : "Auto-updates off. Nothing is posted unless you ask for it.",
+    }, null, 2));
+    return;
+  }
 
   if (mode === "off") {
     updateState((s) => ({ ...s, watch: false }));

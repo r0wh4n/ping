@@ -37,6 +37,18 @@ const newMemberToken = () => "gm_" + rand(24);
 const newWebhook = () => "wh_" + rand(18);
 const clip = (v: string, max: number) => (v.length > max ? v.slice(0, max) + ` …[+${v.length - max} more, fetch with ping_tasks task_id]` : v);
 const cleanName = (s: unknown) => String(s ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
+// What a member does, from a fixed list so the room can be read at a glance and
+// work can be routed by discipline. Kept here rather than in a CHECK constraint
+// so a new category ships with a deploy; anything unrecognised becomes null
+// instead of being stored, so the column never fills with free text.
+const ROLES = [
+  "frontend", "backend", "fullstack", "mobile", "devops", "security",
+  "data", "qa", "design", "docs", "research", "product", "other",
+] as const;
+const cleanRole = (s: unknown): string | null => {
+  const v = String(s ?? "").trim().toLowerCase();
+  return (ROLES as readonly string[]).includes(v) ? v : null;
+};
 const inviteFrom = (s: unknown) => {
   const t = String(s ?? "").trim();
   const m = t.match(/gk_[A-Za-z0-9_-]+/);
@@ -365,9 +377,15 @@ Deno.serve(async (req: Request) => {
       const host = cleanName(body.host_name ?? body.your_name);
       if (host) {
         const token = newMemberToken();
+        const role = cleanRole(body.role ?? body.host_role);
         const { data: m } = await admin
-          .from("agent_group_members").insert({ group_id: g.id, token, name: host }).select("id").single();
+          .from("agent_group_members").insert({ group_id: g.id, token, name: host, role }).select("id").single();
+        // Whoever creates the room owns it. owner_user only covers rooms claimed
+        // from a browser, which an agent-created room never is.
+        if (m?.id) await admin.from("agent_groups").update({ owner_member_id: m.id }).eq("id", g.id);
         out.your_name = host;
+        out.your_role = role;
+        out.owner = true;
         out.token = token;
         out.member_id = m?.id;
         out.next_step = `You're in as \"${host}\". Set this as your MCP bearer token (replace your key with ${token}); then use ping_say / ping_wait / ping_read / ping_share / ping_log. Share the invite link so others can join.`;
@@ -401,8 +419,8 @@ Deno.serve(async (req: Request) => {
       // waits), so two agents' opening exchange vanished every time.
       const { data: m, error } = await admin
         .from("agent_group_members")
-        .insert({ group_id: g.id, token, name, last_read: new Date().toISOString() })
-        .select("id").single();
+        .insert({ group_id: g.id, token, name, role: cleanRole(body.role), last_read: new Date().toISOString() })
+        .select("id,role").single();
       if (error) return json({ ok: false, error: error.message });
       await rateSpend(admin, joinBucket, RL.join); // charge only a join that happened
       // A retry that already succeeded leaves two memberships under one name —
@@ -413,7 +431,10 @@ Deno.serve(async (req: Request) => {
         .select("id", { count: "exact", head: true }).eq("group_id", g.id).eq("name", name);
       const dupe = (sameName ?? 0) > 1;
       return json({
-        ok: true, group_id: g.id, group: g.name, your_name: name, member_id: m.id, token,
+        ok: true, group_id: g.id, group: g.name, your_name: name, your_role: m.role ?? null, member_id: m.id, token,
+        ...(cleanRole(body.role) === null && body.role
+          ? { role_note: `"${String(body.role).slice(0, 20)}" isn't one of the roles, so none was set. Pick one of: ${ROLES.join(", ")} — call ping_card to set it later.` }
+          : {}),
         ...(dupe ? { warning: `There are now ${sameName} members called "${name}" in this room. If an earlier join of yours already succeeded, call ping_leave with that token — two memberships means you will see every message twice.` } : {}),
         next_step: `Joined \"${g.name}\" as \"${name}\". Set ${token} as your MCP bearer token, then use ping_say / ping_wait / ping_read / ping_share / ping_log.`,
         // An agent joining on a human's behalf should be able to tell them what
@@ -552,12 +573,15 @@ Deno.serve(async (req: Request) => {
       // the caller the room name. Selecting a column PostgREST does not know
       // fails the WHOLE row, so the fallback re-asks for what certainly exists.
       let g: Record<string, unknown> | null = null;
-      const ext = await admin.from("agent_groups").select("name,context_id").eq("id", gid).maybeSingle();
+      const ext = await admin.from("agent_groups").select("name,context_id,owner_member_id").eq("id", gid).maybeSingle();
       if (ext.error) {
         const base = await admin.from("agent_groups").select("name").eq("id", gid).maybeSingle();
         g = base.data as Record<string, unknown> | null;
       } else g = ext.data as Record<string, unknown> | null;
+      const myRole = await admin.from("agent_group_members").select("role").eq("id", meId).maybeSingle();
       return json({ ok: true, name: me.name, group: g?.name ?? null, group_id: gid,
+        role: myRole.error ? null : (myRole.data?.role ?? null),
+        owner: g?.owner_member_id != null && String(g.owner_member_id) === String(meId),
         context_id: g?.context_id ?? gid, members: await memberCount(admin, gid) });
     }
     if (action === "members") {
@@ -567,9 +591,10 @@ Deno.serve(async (req: Request) => {
       // card in every room silently read null. So the fallback drops exactly one
       // column at a time, newest first, and keeps everything that does exist.
       const MEMBER_COLS = [
-        "id,name,joined_at,card,last_read,last_active", // everything
-        "id,name,joined_at,card,last_read",             // no last_active yet
-        "id,name,joined_at,last_read",                  // no card either
+        "id,name,role,joined_at,card,last_read,last_active", // everything
+        "id,name,joined_at,card,last_read,last_active",      // no role yet
+        "id,name,joined_at,card,last_read",                  // no last_active yet
+        "id,name,joined_at,last_read",                       // no card either
       ];
       let ms: Record<string, unknown>[] | null = null;
       for (const cols of MEMBER_COLS) {
@@ -577,11 +602,18 @@ Deno.serve(async (req: Request) => {
           .eq("group_id", gid).order("joined_at", { ascending: true });
         if (!r.error) { ms = r.data as unknown as Record<string, unknown>[] | null; break; }
       }
+      // Same tolerance as everywhere else: a room must still list its members
+      // when the owner column has not landed yet.
+      const ownerRow = await admin.from("agent_groups").select("owner_member_id").eq("id", gid).maybeSingle();
+      const ownerId = ownerRow.error ? null : (ownerRow.data?.owner_member_id ?? null);
       return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => {
         const card = (m.card ?? {}) as { description?: string; skills?: string[]; model?: string };
         return {
           name: m.name,
           you: String(m.id) === meId,
+          // Discipline, and who created the room.
+          role: (m.role as string | null) ?? null,
+          owner: ownerId !== null && String(m.id) === String(ownerId),
           // Self-declared capability card — what this agent says it can do.
           description: card.description || null,
           skills: card.skills ?? [],

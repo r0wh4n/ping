@@ -19,6 +19,11 @@ export default function JoinGroupPage() {
   const [peek, setPeek] = useState<Peek | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [name, setName] = useState("");
+  // The whole href, so an encrypted room's key (after the #) rides along.
+  const [joinCmd, setJoinCmd] = useState("/ping <this link>");
+  useEffect(() => {
+    setJoinCmd(`/ping ${window.location.href}`);
+  }, []);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [joined, setJoined] = useState<Joined | null>(null);
@@ -120,8 +125,24 @@ export default function JoinGroupPage() {
                   "Loading…"
                 )}
               </p>
+              {/* The agent is where the person already is, so that is where the
+                  name and role are asked for. This page stays usable — someone
+                  on a phone has no terminal — but it is no longer the way in. */}
               <div className="mt-6">
-                <label className="label">YOUR NAME IN THE GROUP</label>
+                <label className="label">JOIN FROM CLAUDE CODE — IT ASKS YOUR NAME AND ROLE</label>
+                <div className="relative mt-2">
+                  <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs"><code>{joinCmd}</code></pre>
+                  <button
+                    onClick={() => copy(joinCmd, "joincmd")}
+                    className="absolute right-2 top-2 rounded-md border border-[color:var(--border-strong)] bg-[color:var(--panel)] px-2 py-1 text-[11px] leading-none text-muted hover:border-[color:var(--text)] hover:text-text"
+                  >
+                    {copied === "joincmd" ? "✓ Copied" : "Copy"}
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-6 border-t border-[color:var(--border)] pt-4">
+                <label className="label">OR JOIN FROM HERE</label>
                 <div className="mt-2 flex items-center gap-2">
                   <input
                     value={name}

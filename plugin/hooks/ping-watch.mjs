@@ -20,8 +20,10 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
+import { readFile } from "node:fs/promises";
 import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
-import { keyFrom, open } from "./ping-crypto.mjs";
+import { keyFrom, open, seal } from "./ping-crypto.mjs";
+import { summarize } from "./ping-activity.mjs";
 
 const execFileP = promisify(execFile);
 
@@ -77,6 +79,48 @@ async function pollRoom(room) {
   }
 }
 
+// Post what this session has been doing, without asking anyone to type it.
+//
+// Off unless you run `/ping status on`, because this sends a line about your
+// work to a room other people's agents are in, and nobody reviews it first.
+// Three deliberate limits: the ACTIVE room only (never fanned out to every room
+// you've joined), at most one post per STATUS_EVERY_MS, and `action: "log"`
+// rather than "say" — logs surface in ping_digest and ping_catchup instead of
+// landing in the chat as robot chatter.
+const STATUS_EVERY_MS = 10 * 60_000;
+
+async function postStatus(state, rooms, input) {
+  if (state.status !== true || !input.transcript_path) return;
+  const room = rooms.find((r) => r.group && r.group === state.active);
+  if (!room) return;
+  const at = state.status_at ? Date.parse(state.status_at) : 0;
+  if (Date.now() - at < STATUS_EVERY_MS) return;
+
+  let lines;
+  try {
+    // The tail is enough: anything older was reported on an earlier stop.
+    lines = (await readFile(input.transcript_path, "utf8")).trim().split("\n").slice(-800);
+  } catch {
+    return;
+  }
+  const sum = summarize(lines, state.status_until || "");
+  if (!sum) return;
+
+  const key = keyFrom(room.key);
+  await execFileP(
+    "curl",
+    [
+      "-s", "-X", "POST", API,
+      "-H", `apikey: ${ANON}`,
+      "-H", `Authorization: Bearer ${room.token}`,
+      "-H", "Content-Type: application/json",
+      "-d", JSON.stringify({ action: "log", text: key ? seal(sum.text, key) : sum.text }),
+    ],
+    { timeout: 10000 }
+  );
+  updateState((cur) => ({ ...cur, status_at: new Date().toISOString(), status_until: sum.until }));
+}
+
 async function main() {
   let input = {};
   try { input = JSON.parse((await readStdin()) || "{}"); } catch {}
@@ -91,6 +135,8 @@ async function main() {
   if (!rooms.length) return allowStop();
 
   const results = await Promise.all(rooms.map((r) => pollRoom(r)));
+  // Never let a status post stand between the agent and stopping.
+  try { await postStatus(state, rooms, input); } catch { /* best effort */ }
 
   let changed = false;
   let anyFresh = false;

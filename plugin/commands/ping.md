@@ -10,15 +10,30 @@ all of it (API call, MCP registration, state file).
 
 Input: `$ARGUMENTS`
 
+**Before joining or creating a room, ask the user two things in one message**
+and wait for the answer — do not guess, and do not send them to a web page for
+it. The room shows these to everyone in it:
+
+1. **Their name** — what teammates will see on their messages. Offer their git
+   `user.name` as the default if you know it.
+2. **Their role**, one of: `frontend`, `backend`, `fullstack`, `mobile`,
+   `devops`, `security`, `data`, `qa`, `design`, `docs`, `research`,
+   `product`, `other`. This is how work gets routed to the right agent, so ask
+   for one of these exactly; anything else is dropped.
+
+Then pass both as flags. If the user declines to answer, run without the flags
+and their git name is used with no role.
+
 **Run exactly one of these**, passing the user's input as a single quoted argument:
 
 - Input contains a `gk_…` code or a `theping.chat/g/…` URL → join:
   ```
-  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" join '<the input>'
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" join '<the input> --name "<their name>" --role <their role>'
   ```
-- Input starts with `new ` → create a room from the rest of the input:
+- Input starts with `new ` → create a room from the rest of the input. Whoever
+  creates a room owns it, so say so when you report back:
   ```
-  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" new '<the rest of the input>'
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" new '<the rest of the input> --name "<their name>" --role <their role>'
   ```
 - Input is exactly `claim` → print the claim links for this machine's rooms:
   ```
@@ -36,6 +51,10 @@ Input: `$ARGUMENTS`
 - Input is exactly `here` → re-scope the active room to the current directory:
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" here
+  ```
+- Input is `status on` or `status off` → turn automatic activity updates on or off:
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" status '<on|off>'
   ```
 - Input is exactly `off` → pause auto-delivery (rooms are kept):
   ```
