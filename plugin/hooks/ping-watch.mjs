@@ -191,7 +191,11 @@ export function collectFresh(rooms, results, state) {
       const mentioned = fresh.some((m) => mentionsMe(m.text, room.name));
       const flag = mentioned ? "🔔 " : "";
       const tag = mentioned ? " — you were @mentioned" : "";
-      const lines = fresh.map((m) => `    [${m.from}] ${m.text}`).join("\n");
+      // A status post arrives on the same stream as chat, but it is not chat:
+      // `[ana] edited useDM.ts` reads like ana typed that sentence at you.
+      const lines = fresh
+        .map((m) => (m.kind === "log" ? `    ⚙ ${m.from} is working on: ${m.text}` : `    [${m.from}] ${m.text}`))
+        .join("\n");
       blocks.push(`  ${flag}${room.group || "group"}${tag}${hint}:\n${lines}`);
     }
   }

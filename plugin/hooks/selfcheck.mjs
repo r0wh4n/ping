@@ -40,18 +40,20 @@ assert.equal(legacy[0].name, "me", "legacy shape must keep name or @mentions bre
     { from: "ana", text: "old news", mine: false, created_at: "2026-11-03T09:00:00Z" },
     { from: "me", text: "my own line", mine: true, created_at: "2026-11-03T10:30:00Z" },
     { from: "ana", text: "deploy is green", mine: false, created_at: "2026-11-03T11:00:00Z" },
+    { from: "ana", kind: "log", text: "edited useDM.ts", mine: false, created_at: "2026-11-03T11:01:00Z" },
   ];
   const r = collectFresh([room], [msgs], { active: "team" });
   assert.equal(r.anyFresh, true, "a newer message from someone else is fresh");
   assert.match(r.blocks[0], /deploy is green/, "delivers the new message");
   assert.doesNotMatch(r.blocks[0], /old news/, "never re-delivers what was already seen");
   assert.doesNotMatch(r.blocks[0], /my own line/, "never delivers my own message back to me");
-  assert.equal(r.next[0].last_seen, "2026-11-03T11:00:00Z", "cursor advances to the newest delivered");
+  assert.match(r.blocks[0], /⚙ ana is working on: edited useDM\.ts/, "a status post is not rendered as something ana said");
+  assert.equal(r.next[0].last_seen, "2026-11-03T11:01:00Z", "cursor advances to the newest delivered");
   assert.equal(collectFresh([room], [null], { active: "team" }).changed, false, "a failed poll leaves the cursor alone");
   // A room seen for the first time adopts history as read rather than replaying it.
   const first = collectFresh([{ ...room, last_seen: undefined }], [msgs], { active: "team" });
   assert.equal(first.anyFresh, false, "first sight of a room delivers nothing");
-  assert.equal(first.next[0].last_seen, "2026-11-03T11:00:00Z", "but starts the cursor at the newest");
+  assert.equal(first.next[0].last_seen, "2026-11-03T11:01:00Z", "but starts the cursor at the newest");
 }
 
 // --- activity summary -----------------------------------------------------

@@ -57,6 +57,11 @@ export default function FleetPage() {
   const [claimErr, setClaimErr] = useState<string | null>(null);
   const [members, setMembers] = useState<Member[]>([]);
   const [kind, setKind] = useState<string>("all");
+  const [brief, setBrief] = useState<string | null>(null);
+  const [briefBusy, setBriefBusy] = useState(false);
+  // A sealed room is ciphertext on the server, so the server's model would be
+  // summarising noise. Tracked from the RAW rows, before we decrypt them here.
+  const [sealedRoom, setSealedRoom] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const listRef = useRef<HTMLDivElement>(null);
@@ -102,7 +107,9 @@ export default function FleetPage() {
       const raw = data.messages as Msg[];
       // Sealed messages with no key is the one case worth surfacing: the room
       // is readable, we just cannot read it from this browser yet.
-      setLocked(!keyRef.current && raw.some((m) => isSealed(m.text)));
+      const anySealed = raw.some((m) => isSealed(m.text));
+      setSealedRoom(anySealed);
+      setLocked(!keyRef.current && anySealed);
       const fresh = await openAll(raw, keyRef.current);
       setMsgs((cur) => {
         if (!fresh.length) return cur;
@@ -121,6 +128,7 @@ export default function FleetPage() {
     setMsgs([]);
     setNoMore(false);
     setKind("all");
+    setBrief(null);
     setConfirmDelete(false);
     setLocked(false);
     setUnlockVal("");
@@ -259,6 +267,27 @@ export default function FleetPage() {
       prevHeight.current = null;
     }
     setLoadingOlder(false);
+  };
+
+  // What everyone has been up to, in prose. The agents already post what they
+  // did as `log` entries every minute; this hands that day's timeline to the
+  // server's model (`digest`) rather than making anyone read the raw lines.
+  // Keyless by design — if no LLM_API_KEY is set the server says so instead of
+  // guessing, and the same digest is still available inside any agent in the
+  // room via ping_digest, written by that agent's own model.
+  const summarise = async () => {
+    if (!active || briefBusy) return;
+    setBriefBusy(true);
+    const { data } = await supabase.functions.invoke("group-api", {
+      body: { action: "digest", group_id: active, period: "day" },
+    });
+    setBrief(
+      data?.digest ??
+        (data?.mode === "agent"
+          ? "This server has no summary model configured (LLM_API_KEY). Ask your own AI for ping_digest instead — it writes the same digest on your subscription."
+          : (data?.error ?? "Couldn't summarise that room."))
+    );
+    setBriefBusy(false);
   };
 
   // Adopt an ownerless room (created via /ping or MCP) so it appears in the
@@ -513,7 +542,27 @@ export default function FleetPage() {
                     {k}
                   </button>
                 ))}
+                <button
+                  onClick={summarise}
+                  disabled={briefBusy || sealedRoom || msgs.length === 0}
+                  title={sealedRoom ? "This room is end-to-end encrypted — the server only has ciphertext to read." : undefined}
+                  className="ml-auto rounded-full border border-border px-2 py-0.5 text-[10px] uppercase tracking-wider text-muted transition hover:text-text disabled:opacity-40"
+                >
+                  {briefBusy ? "Summarising…" : "Summarise today"}
+                </button>
               </div>
+
+              {brief && (
+                <div className="mt-3 rounded-lg border border-border bg-[color:var(--panel)] p-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="label">WHAT EVERYONE&apos;S BEEN DOING · LAST 24H</p>
+                    <button onClick={() => setBrief(null)} className="text-xs text-muted hover:text-text">
+                      ×
+                    </button>
+                  </div>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-relaxed text-[color:var(--text)]">{brief}</p>
+                </div>
+              )}
             </div>
 
             <div

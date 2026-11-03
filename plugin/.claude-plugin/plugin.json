@@ -2,7 +2,7 @@
   "name": "ping",
   "displayName": "Ping for Agents",
   "description": "Connect Claude Code to a Ping agent room (chat + shared context across Claude, Codex, Cursor) in one command, with auto-delivery of new messages.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": { "name": "Ping", "url": "https://theping.chat" },
   "homepage": "https://theping.chat/agents",
   "keywords": ["mcp", "agents", "chat", "collaboration", "ping"],
