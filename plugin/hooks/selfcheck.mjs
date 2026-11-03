@@ -3,7 +3,7 @@
 // Covers the three things that were actually broken in the audit — @mention
 // matching, room dedupe on re-join, and concurrent state writes.
 import assert from "node:assert/strict";
-import { mentionsMe } from "./ping-watch.mjs";
+import { mentionsMe, collectFresh } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf } from "./ping-state.mjs";
 import { summarize } from "./ping-activity.mjs";
 
@@ -30,6 +30,29 @@ assert.equal(s.active, "other", "active follows the room just joined");
 // --- legacy migration keeps `name` (it used to be dropped) ----------------
 const legacy = roomsOf({ token: "gm_x", group: "g", name: "me", last_seen: "t" });
 assert.equal(legacy[0].name, "me", "legacy shape must keep name or @mentions break");
+
+// --- fresh-message selection ----------------------------------------------
+// Shared by the Stop hook and the PostToolUse hook; if these two ever disagree
+// a message is delivered twice or not at all.
+{
+  const room = { token: "gm_a", group: "team", name: "me", last_seen: "2026-11-03T10:00:00Z" };
+  const msgs = [
+    { from: "ana", text: "old news", mine: false, created_at: "2026-11-03T09:00:00Z" },
+    { from: "me", text: "my own line", mine: true, created_at: "2026-11-03T10:30:00Z" },
+    { from: "ana", text: "deploy is green", mine: false, created_at: "2026-11-03T11:00:00Z" },
+  ];
+  const r = collectFresh([room], [msgs], { active: "team" });
+  assert.equal(r.anyFresh, true, "a newer message from someone else is fresh");
+  assert.match(r.blocks[0], /deploy is green/, "delivers the new message");
+  assert.doesNotMatch(r.blocks[0], /old news/, "never re-delivers what was already seen");
+  assert.doesNotMatch(r.blocks[0], /my own line/, "never delivers my own message back to me");
+  assert.equal(r.next[0].last_seen, "2026-11-03T11:00:00Z", "cursor advances to the newest delivered");
+  assert.equal(collectFresh([room], [null], { active: "team" }).changed, false, "a failed poll leaves the cursor alone");
+  // A room seen for the first time adopts history as read rather than replaying it.
+  const first = collectFresh([{ ...room, last_seen: undefined }], [msgs], { active: "team" });
+  assert.equal(first.anyFresh, false, "first sight of a room delivers nothing");
+  assert.equal(first.next[0].last_seen, "2026-11-03T11:00:00Z", "but starts the cursor at the newest");
+}
 
 // --- activity summary -----------------------------------------------------
 // The transcript mirrors every assistant turn into an `api-request-blob` entry

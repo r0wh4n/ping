@@ -6,6 +6,13 @@
         "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-watch.mjs\"",
         "timeout": 15
       }
+    ],
+    "PostToolUse": [
+      {
+        "type": "command",
+        "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-live.mjs\"",
+        "timeout": 10
+      }
     ]
   }
 }

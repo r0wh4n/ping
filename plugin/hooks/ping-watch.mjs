@@ -49,7 +49,7 @@ export function mentionsMe(text, name) {
   });
 }
 
-function readStdin() {
+export function readStdin() {
   return new Promise((res) => {
     let d = "";
     process.stdin.on("data", (c) => (d += c));
@@ -58,7 +58,7 @@ function readStdin() {
   });
 }
 
-async function pollRoom(room) {
+export async function pollRoom(room) {
   try {
     const { stdout } = await execFileP(
       "curl",
@@ -87,9 +87,9 @@ async function pollRoom(room) {
 // you've joined), at most one post per STATUS_EVERY_MS, and `action: "log"`
 // rather than "say" — logs surface in ping_digest and ping_catchup instead of
 // landing in the chat as robot chatter.
-const STATUS_EVERY_MS = 10 * 60_000;
+const STATUS_EVERY_MS = 60_000;
 
-async function postStatus(state, rooms, input) {
+export async function postStatus(state, rooms, input) {
   if (state.status !== true || !input.transcript_path) return;
   const room = rooms.find((r) => r.group && r.group === state.active);
   if (!room) return;
@@ -138,6 +138,25 @@ async function main() {
   // Never let a status post stand between the agent and stopping.
   try { await postStatus(state, rooms, input); } catch { /* best effort */ }
 
+  const { blocks, next, changed, anyFresh } = collectFresh(rooms, results, state);
+  if (changed) saveCursors(next);
+  if (!anyFresh) return allowStop();
+
+  const activeHint = state.active ? ` (your active room is "${state.active}")` : "";
+  const reason =
+    `📨 New Ping messages:\n` +
+    `${blocks.join("\n")}\n\n` +
+    `Reply with the ping_say tool${activeHint}. For your active room no extra args are needed; ` +
+    `to reply in another room, pass its token shown above as room:"gm_…". If nothing is needed, you can stop.`;
+
+  process.stdout.write(JSON.stringify({ decision: "block", reason }));
+  process.exit(0);
+}
+
+// Which rooms have something new, formatted for injection — shared by the Stop
+// hook (idle) and the PostToolUse hook (mid-task) so the two can never disagree
+// about what counts as a new message or how a cursor moves.
+export function collectFresh(rooms, results, state) {
   let changed = false;
   let anyFresh = false;
   const blocks = [];
@@ -176,28 +195,18 @@ async function main() {
       blocks.push(`  ${flag}${room.group || "group"}${tag}${hint}:\n${lines}`);
     }
   }
+  return { blocks, next, changed, anyFresh };
+}
 
-  // Merge only the cursors we advanced back into whatever state is on disk NOW.
-  // Writing our whole snapshot would erase a room another session joined while
-  // we were polling, and would resurrect watch:true after a concurrent /ping off.
-  if (changed) {
-    const cursors = new Map(next.filter((r) => r.last_seen).map((r) => [r.token, r.last_seen]));
-    updateState((cur) => ({
-      ...cur,
-      rooms: roomsOf(cur).map((r) => (cursors.has(r.token) ? { ...r, last_seen: cursors.get(r.token) } : r)),
-    }));
-  }
-  if (!anyFresh) return allowStop();
-
-  const activeHint = state.active ? ` (your active room is "${state.active}")` : "";
-  const reason =
-    `📨 New Ping messages:\n` +
-    `${blocks.join("\n")}\n\n` +
-    `Reply with the ping_say tool${activeHint}. For your active room no extra args are needed; ` +
-    `to reply in another room, pass its token shown above as room:"gm_…". If nothing is needed, you can stop.`;
-
-  process.stdout.write(JSON.stringify({ decision: "block", reason }));
-  process.exit(0);
+// Merge only the cursors we advanced back into whatever state is on disk NOW.
+// Writing our whole snapshot would erase a room another session joined while we
+// were polling, and would resurrect watch:true after a concurrent /ping off.
+export function saveCursors(next) {
+  const cursors = new Map(next.filter((r) => r.last_seen).map((r) => [r.token, r.last_seen]));
+  updateState((cur) => ({
+    ...cur,
+    rooms: roomsOf(cur).map((r) => (cursors.has(r.token) ? { ...r, last_seen: cursors.get(r.token) } : r)),
+  }));
 }
 
 // Only run as a hook, not when something imports mentionsMe (e.g. selfcheck) —
