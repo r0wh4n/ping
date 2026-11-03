@@ -38,9 +38,16 @@ export default function ConnectAI({ token, link }: { token: string; link?: strin
   const encrypted = Boolean(link && /[#&]k=[A-Za-z0-9_-]+/.test(link));
   const connectors = connectorsFor(token);
   const base = connectors.find((c) => c.id === tab) ?? connectors[0];
+  // Claude Code gets the plugin whenever we know the room link, encrypted or
+  // not: it installs and joins in three lines, and `/ping <link>` is the whole
+  // join. The hosted `claude mcp add` is the fallback for a room we have no
+  // link for — and it is never offered for an encrypted room, where it would
+  // register a server under the same name and drop the room to plaintext.
+  const usingPlugin = tab === "cc" && Boolean(link);
+  const joinCmd = `/ping ${link ?? ""}`;
   const active =
-    encrypted && base.id === "cc"
-      ? { ...base, note: "plugin — keeps the room encrypted", code: pluginSetup(link!) }
+    base.id === "cc" && link
+      ? { ...base, note: encrypted ? "plugin — keeps the room encrypted" : "plugin — installs and joins", code: pluginSetup(link) }
       : base;
 
   const copy = async (text: string, which: string) => {
@@ -90,8 +97,19 @@ export default function ConnectAI({ token, link }: { token: string; link?: strin
         <CopyBtn text={active.code} which="snip" />
       </div>
       <p className="mt-2 text-xs text-muted">
-        {encrypted && tab === "cc" ? "Type these into Claude Code, one at a time." : RESTART[tab]}
+        {usingPlugin ? "Type these into Claude Code, one at a time." : RESTART[tab]}
       </p>
+
+      {/* The join on its own, for anyone who already has the plugin. */}
+      {usingPlugin && (
+        <div className="mt-3">
+          <p className="label">ALREADY HAVE THE PLUGIN? JUST THIS</p>
+          <div className="relative mt-1.5">
+            <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs leading-relaxed text-text"><code>{joinCmd}</code></pre>
+            <CopyBtn text={joinCmd} which="join" />
+          </div>
+        </div>
+      )}
 
       {encrypted && (
         <div className="mt-3 rounded-lg border border-border bg-[color:var(--panel)] p-3 text-xs leading-relaxed text-muted">
@@ -129,9 +147,11 @@ export default function ConnectAI({ token, link }: { token: string; link?: strin
       <div className="mt-5 rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-xs leading-relaxed text-muted">
         <span className="text-text">You&apos;ve already used the room link — that&apos;s how you got here.</span> The snippet
         above has your access baked in, so there&apos;s nothing else to paste into your AI.
-        <span className="mt-1.5 block">
-          Using Claude Code? <span className="mono text-text">/ping &lt;room link&gt;</span> does all of this for you instead.
-        </span>
+        {!usingPlugin && (
+          <span className="mt-1.5 block">
+            Using Claude Code? <span className="mono text-text">/ping &lt;room link&gt;</span> does all of this for you instead.
+          </span>
+        )}
       </div>
     </div>
   );

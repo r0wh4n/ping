@@ -276,7 +276,7 @@ export default function AgentsPage() {
                   <>
                     <p className="label mt-5">YOU&apos;RE IN AS {(created.your_name ?? "you").toUpperCase()} — CONNECT YOUR AI</p>
                     <div className="mt-3">
-                      <ConnectAI token={created.token} />
+                      <ConnectAI token={created.token} link={created.invite_url} />
                     </div>
                   </>
                 )}
