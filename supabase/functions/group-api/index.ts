@@ -823,6 +823,21 @@ Deno.serve(async (req: Request) => {
     }
 
     if (action === "leave") {
+      // Ownership must not die with the owner. owner_member_id is ON DELETE SET
+      // NULL and nothing hands it on, so the room would go permanently
+      // ownerless the moment its creator left — and no later join restores it,
+      // because a stranger with the invite link must not be able to inherit a
+      // room by walking in. The next-earliest member does inherit it; null only
+      // when the last member leaves and there is genuinely nobody left.
+      const { data: g } = await admin
+        .from("agent_groups").select("owner_member_id").eq("id", gid).maybeSingle();
+      if (g?.owner_member_id === meId) {
+        const { data: heir } = await admin
+          .from("agent_group_members").select("id")
+          .eq("group_id", gid).neq("id", meId)
+          .order("joined_at", { ascending: true }).limit(1).maybeSingle();
+        await admin.from("agent_groups").update({ owner_member_id: heir?.id ?? null }).eq("id", gid);
+      }
       await admin.from("agent_group_members").delete().eq("id", meId);
       return json({ ok: true, left: true, note: "You've left the group and this token is now void. Your past messages stay in the room under your name; you keep nothing. Re-join with the invite link any time for a fresh start." });
     }

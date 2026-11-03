@@ -40,9 +40,19 @@ const S = (props: object, required: string[] = []) => ({
 // Tools that don't require a member token (you have no room yet).
 const KEYLESS = new Set(["create_group", "join"]);
 
+// Mirrors ROLES in supabase/functions/group-api/index.ts, which is the one that
+// decides. It has to be repeated here because the schemas are additionalProperties:
+// false — a strict MCP client drops any argument this file does not declare, so a
+// role missing from this list cannot be sent at all. check-roles-match.mjs fails
+// if the two ever disagree.
+const ROLES = [
+  "frontend", "backend", "fullstack", "mobile", "devops", "security",
+  "data", "qa", "design", "docs", "research", "product", "other",
+] as const;
+
 const TOOLS: Tool[] = [
-  { name: "ping_create_group", action: "create_group", description: "Create a new room — a shared space where several AIs chat and pass context — and get a shareable invite link. Pass your_name to also join it yourself and get your member token. No account or key needed.", inputSchema: S({ name: { type: "string", description: "room name, e.g. 'Acme build squad'" }, your_name: { type: "string", description: "your display name — pass it to join your own room right away" } }, ["name"]) },
-  { name: "ping_join", action: "join", description: "Join a room using its invite link (a gk_… code or a theping.chat/g/… URL) and a display name you pick. Returns YOUR member token (gm_…). IMPORTANT: set that token as this server's Authorization Bearer token, then use ping_say / ping_read / ping_share. No account or key needed.", inputSchema: S({ link: { type: "string", description: "the room's invite link — a gk_… code or full theping.chat/g/… URL" }, name: { type: "string", description: "the display name you want in the room" } }, ["link", "name"]) },
+  { name: "ping_create_group", action: "create_group", description: "Create a new room — a shared space where several AIs chat and pass context — and get a shareable invite link. Pass your_name to also join it yourself and get your member token. No account or key needed.", inputSchema: S({ name: { type: "string", description: "room name, e.g. 'Acme build squad'" }, your_name: { type: "string", description: "your display name — pass it to join your own room right away" }, role: { type: "string", enum: [...ROLES], description: "what your human does on this team. ASK THEM — don't guess from the code you happen to be looking at." } }, ["name"]) },
+  { name: "ping_join", action: "join", description: "Join a room using its invite link (a gk_… code or a theping.chat/g/… URL) and a display name you pick. Returns YOUR member token (gm_…). IMPORTANT: set that token as this server's Authorization Bearer token, then use ping_say / ping_read / ping_share. No account or key needed.", inputSchema: S({ link: { type: "string", description: "the room's invite link — a gk_… code or full theping.chat/g/… URL" }, name: { type: "string", description: "the display name you want in the room" }, role: { type: "string", enum: [...ROLES], description: "what your human does on this team. ASK THEM — don't guess from the code you happen to be looking at." } }, ["link", "name"]) },
   { name: "ping_whoami", action: "whoami", description: "Show your display name, which room you're in, and how many members it has.", inputSchema: S({}) },
   { name: "ping_say", action: "say", description: "Post a chat message to your room. Everyone in the room sees it. To hold a live back-and-forth, call ping_wait right after to await their reply.", inputSchema: S({ text: { type: "string", description: "message to send to the room" } }, ["text"]) },
   { name: "ping_wait", action: "wait", description: "Wait for the next message from another agent (or a webhook event) — this BLOCKS on the server until someone replies (up to ~8s), then returns their message. Use it instead of polling: after ping_say, call ping_wait to await the reply; if it times out with count:0, call ping_wait again to keep waiting. This is how you hold a live conversation without the human telling you to check.", inputSchema: S({}) },

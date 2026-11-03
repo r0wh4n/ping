@@ -69,18 +69,51 @@ async function main() {
   const stamp = new Date().toISOString();
   let room = process.env.PING_SMOKE_ROOM;
 
+  // Agent A either creates the room (and so owns it) or joins an existing one.
+  // Creating is the only path that exercises ownership, which is why a fresh
+  // run checks more than a reused-room run can.
+  let a;
+  let aCreated = false;
   if (!room) {
-    const made = await step("create room", () =>
-      call("ping_create_group", { name: "ping smoke test" }, null));
-    room = made.invite_code ?? made.code ?? made.invite_url;
+    a = await step("agent A creates the room as backend", () =>
+      call("ping_create_group", { name: "ping smoke test", your_name: "smoke-a", role: "backend" }, null));
+    room = a.invite_code ?? a.code ?? a.invite_url;
+    aCreated = true;
     process.stdout.write(`\nNo PING_SMOKE_ROOM set — created one. Save this and reuse it:\n\n  export PING_SMOKE_ROOM=${room}\n\n`);
+  } else {
+    // Roles go in on join. The point is not that the field round-trips but that
+    // a real client can send it: the MCP schemas are additionalProperties:false,
+    // so a role the route does not declare is dropped before it reaches here.
+    a = await step("agent A joins as backend", () =>
+      call("ping_join", { link: room, name: "smoke-a", role: "backend" }, null));
   }
-
-  const a = await step("join agent A", () => call("ping_join", { link: room, name: "smoke-a" }, null));
   tokens.push(a.token);
-  const b = await step("join agent B", () => call("ping_join", { link: room, name: "smoke-b" }, null));
+  if (aCreated && a.owner !== true) throw new Error("the agent that created the room was not made its owner");
+  const b = await step("agent B joins as frontend", () =>
+    call("ping_join", { link: room, name: "smoke-b", role: "frontend" }, null));
   tokens.push(b.token);
   if (a.group_id !== b.group_id) throw new Error("agents landed in different rooms");
+  if (a.your_role !== "backend" || b.your_role !== "frontend") {
+    throw new Error(`roles did not stick: A=${a.your_role} B=${b.your_role}`);
+  }
+
+  // Each agent must see the OTHER's role, or routing work by role is guesswork.
+  await step("each sees the other's role and who owns the room", async () => {
+    const list = await call("ping_members", {}, b.token);
+    const byName = Object.fromEntries((list.members ?? []).map((m) => [m.name, m]));
+    if (byName["smoke-a"]?.role !== "backend") {
+      throw new Error(`B sees A's role as ${byName["smoke-a"]?.role ?? "nothing"}, not backend`);
+    }
+    // Never more than one owner, or "the owner decides" means nothing. A room
+    // created before ownership existed has none, so only a fresh run can insist
+    // on exactly one.
+    const owners = (list.members ?? []).filter((m) => m.owner);
+    if (owners.length > 1) throw new Error(`${owners.length} members claim to own the room`);
+    if (aCreated && owners[0]?.name !== "smoke-a") {
+      throw new Error(`the room's creator is not its owner — owner is ${owners[0]?.name ?? "nobody"}`);
+    }
+    return list;
+  });
 
   await step("A posts a message", () => call("ping_say", { text: `smoke ${stamp}` }, a.token));
 
@@ -119,6 +152,18 @@ async function main() {
     const got = await call("ping_claim", { task_id: open.id, force: true }, b.token);
     if (!JSON.stringify(got).includes(stamp)) throw new Error("claim did not return the artifact");
   });
+
+  // The owner leaving must hand the room on, not orphan it: owner_member_id is
+  // ON DELETE SET NULL, so before this was fixed a creator who left took the
+  // room's ownership with them and no later join could restore it.
+  if (aCreated) {
+    await step("A (the owner) leaves and B inherits the room", async () => {
+      await call("ping_leave", {}, tokens.shift());
+      const who = await call("ping_whoami", {}, b.token);
+      if (who.owner !== true) throw new Error("the owner left and the room was orphaned");
+      return who;
+    });
+  }
 
   // Leave, so a daily run doesn't grow the member list forever.
   await step("both agents leave", () => cleanup());
