@@ -3,8 +3,8 @@
 // Covers the three things that were actually broken in the audit — @mention
 // matching, room dedupe on re-join, and concurrent state writes.
 import assert from "node:assert/strict";
-import { mentionsMe, collectFresh } from "./ping-watch.mjs";
-import { upsertRoom, roomsOf } from "./ping-state.mjs";
+import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
+import { upsertRoom, roomsOf, VERSION } from "./ping-state.mjs";
 import { summarize } from "./ping-activity.mjs";
 
 // --- @mention -------------------------------------------------------------
@@ -83,4 +83,20 @@ assert.equal(summarize(lines, "2026-11-03T10:05:00Z"), null, "nothing new since 
 assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name: "Read", input: { file_path: "/x/a.ts" } }])], ""), null,
   "reading a file is not doing something");
 
-console.log("selfcheck: all assertions passed");
+// --- where an automatic status post goes ----------------------------------
+// `status on` with no active room used to post nowhere, silently, forever.
+{
+  const team = { token: "gm_a", group: "team" };
+  const other = { token: "gm_b", group: "other" };
+  assert.equal(statusRoom([team, other], "other"), other, "the active room wins");
+  assert.equal(statusRoom([team], undefined), team, "no active room, one room -> post there");
+  assert.equal(statusRoom([team, other], undefined), null, "no active room, several -> never guess");
+  assert.equal(statusRoom([], "team"), null, "no rooms -> nothing to post to");
+}
+
+// --- the version we report to the server ----------------------------------
+// It is sent as x-ping-plugin and is the only thing that tells the server an
+// install is stale; a hardcoded copy drifted twice before it was read here.
+assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, not a stale literal");
+
+console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);

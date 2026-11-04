@@ -13,6 +13,8 @@
 // else gets plain application/json. Replying only in application/json makes some
 // SDK clients hang waiting for a stream, so we frame it as SSE when asked.
 
+import pluginManifest from "../../../plugin/.claude-plugin/plugin.json";
+
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
 // ping_wait long-polls (~8s) on the upstream edge function; allow headroom.
@@ -92,6 +94,35 @@ for (const t of TOOLS) {
 }
 
 // The member/invite token this client is authenticating with (gm_ or gk_).
+// Tell a stale plugin to update, through the one channel a stale plugin already
+// renders: its own tool results. The local proxy forwards our result text
+// verbatim, so the agent reads this and tells its human — no client change
+// needed, which matters because an updater that ships in a new version can
+// never reach the old versions that need it.
+//
+// Read from the manifest, so it cannot drift from the version the marketplace
+// actually serves — both are this repo.
+//
+// A client that sends no version is left alone. That is someone driving the
+// hosted endpoint directly from Codex or Cursor, who has no plugin to update;
+// it also means plugins older than the release that added the header never see
+// this. Nothing reaches those but a message in the room.
+const LATEST_PLUGIN: string = pluginManifest.version;
+
+function withUpdateNotice(data: unknown, req: Request): unknown {
+  const seen = req.headers.get("x-ping-plugin");
+  // Exact inequality, deliberately: no semver ordering to get wrong, and the
+  // only version that is current is the current one.
+  if (!seen || seen === LATEST_PLUGIN || typeof data !== "object" || data === null) return data;
+  return {
+    ...data,
+    notice:
+      `Your Ping plugin is ${seen}; ${LATEST_PLUGIN} is out. Tell the person you are working with to run ` +
+      `\`claude plugin update ping@ping\` and restart Claude Code. Until they do, this session cannot post ` +
+      `what it is working on, so the room sees nothing from them between messages.`,
+  };
+}
+
 function tokenFrom(req: Request): string | null {
   const h = req.headers.get("authorization") ?? "";
   const m = h.match(/^Bearer\s+((?:gm_|gk_)\S+)/i);
@@ -286,7 +317,7 @@ export async function POST(req: Request) {
 
     const data = await callGroupApi(effToken, { action, ...args });
     return result(req, id, {
-      content: [{ type: "text", text: JSON.stringify(data, null, 2) }],
+      content: [{ type: "text", text: JSON.stringify(withUpdateNotice(data, req), null, 2) }],
       isError: (data as { ok?: boolean })?.ok === false,
     });
   }

@@ -21,7 +21,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
-import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
+import { readState, updateState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
 import { keyFrom, open, seal } from "./ping-crypto.mjs";
 import { summarize } from "./ping-activity.mjs";
 
@@ -67,6 +67,7 @@ export async function pollRoom(room) {
         "-H", `apikey: ${ANON}`,
         "-H", `Authorization: Bearer ${room.token}`,
         "-H", "Content-Type: application/json",
+        "-H", `x-ping-plugin: ${VERSION}`,
         // our own cursor => server won't move the shared last_read
         "-d", JSON.stringify({ action: "read", since: room.last_seen || FLOOR }),
       ],
@@ -89,9 +90,27 @@ export async function pollRoom(room) {
 // landing in the chat as robot chatter.
 const STATUS_EVERY_MS = 60_000;
 
+/**
+ * Which room an automatic status post goes to.
+ *
+ * The active room — or, if none is set, the only room there is. Without that
+ * second half `status on` was a silent no-op for anyone whose state had no
+ * `active` (a room joined before active existed, or a state file that lost it):
+ * the gate below returned every tick, forever, while /ping cheerfully reported
+ * status on. ping-mcp.mjs's activeRoom() and `/ping here` already fall back
+ * this way; this was the one place that didn't.
+ *
+ * Deliberately NOT ping-mcp's "last room" fallback. That one serves a call the
+ * person just made by hand; this one fires on a timer with nobody watching, and
+ * guessing wrong posts your work into another client's room irreversibly. More
+ * than one candidate and no active room set means stay quiet.
+ */
+export const statusRoom = (rooms, active) =>
+  rooms.find((r) => r.group && r.group === active) ?? (rooms.length === 1 ? rooms[0] : null);
+
 export async function postStatus(state, rooms, input) {
   if (state.status !== true || !input.transcript_path) return;
-  const room = rooms.find((r) => r.group && r.group === state.active);
+  const room = statusRoom(rooms, state.active);
   if (!room) return;
   const at = state.status_at ? Date.parse(state.status_at) : 0;
   if (Date.now() - at < STATUS_EVERY_MS) return;
@@ -114,6 +133,7 @@ export async function postStatus(state, rooms, input) {
       "-H", `apikey: ${ANON}`,
       "-H", `Authorization: Bearer ${room.token}`,
       "-H", "Content-Type: application/json",
+      "-H", `x-ping-plugin: ${VERSION}`,
       "-d", JSON.stringify({ action: "log", text: key ? seal(sum.text, key) : sum.text }),
     ],
     { timeout: 10000 }

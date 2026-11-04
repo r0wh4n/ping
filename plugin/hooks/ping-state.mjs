@@ -17,6 +17,19 @@ export const DIR = join(homedir(), ".ping");
 export const STATE = join(DIR, "state.json");
 const LOCK = STATE + ".lock";
 
+// This plugin's own version, read from the manifest rather than written down
+// again — the copy in ping-mcp.mjs's serverInfo said 0.3.0 while the plugin was
+// 0.3.1, and had said 0.3.0 back when it was 0.2.0. Every call to the server
+// carries it as x-ping-plugin, which is the only way the server can know an
+// install is stale and say so.
+export const VERSION = (() => {
+  try {
+    return JSON.parse(readFileSync(new URL("../.claude-plugin/plugin.json", import.meta.url), "utf8")).version ?? "0";
+  } catch {
+    return "0"; // running from a checkout without the manifest; never fatal
+  }
+})();
+
 // Block without spinning the CPU. Node has no sleepSync; Atomics.wait on a
 // throwaway buffer is the standard trick.
 const sleepSync = (ms) => {

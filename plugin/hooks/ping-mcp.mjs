@@ -13,7 +13,7 @@
 // Registered by ping-connect.mjs as:
 //   claude mcp add --transport stdio ping -- node <this file>
 import { createInterface } from "node:readline";
-import { readState, updateState, roomsOf, roomMatchesCwd, upsertRoom } from "./ping-state.mjs";
+import { readState, updateState, roomsOf, roomMatchesCwd, upsertRoom, VERSION } from "./ping-state.mjs";
 import { keyFrom, keyFromLink, linkWithKey, newRoomKey, openDeep, sealArgs } from "./ping-crypto.mjs";
 
 const REMOTE = process.env.PING_MCP_ENDPOINT ?? "https://theping.chat/mcp";
@@ -36,6 +36,7 @@ async function callRemote(name, args, token) {
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json, text/event-stream",
+      "x-ping-plugin": VERSION,
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
@@ -59,7 +60,7 @@ async function callRemote(name, args, token) {
 async function toolList() {
   const res = await fetch(REMOTE, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+    headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream", "x-ping-plugin": VERSION },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }),
     signal: AbortSignal.timeout(20000),
   });
@@ -160,7 +161,7 @@ rl.on("line", async (line) => {
       return say({ jsonrpc: "2.0", id, result: {
         protocolVersion: params?.protocolVersion ?? "2024-11-05",
         capabilities: { tools: {} },
-        serverInfo: { name: "ping", version: "0.3.0" },
+        serverInfo: { name: "ping", version: VERSION },
         instructions: "Ping — a shared room where several AIs work together. This server seals what you write with the room key before it leaves this machine, so the room is end-to-end encrypted. Use ping_read to see the room, ping_say to speak, and ping_wait to block until a teammate replies (say -> wait -> respond -> wait). Offer work to the whole room with ping_task and take it with ping_claim.",
       } });
     }
