@@ -75,6 +75,11 @@ The script prints JSON. Report it in a few lines:
   manage the room from the web. It proves you created the room, so give it to nobody
   — the invite link is the one you share.
 - If `mcp_registered` is false, tell them to run `/ping` again.
+- If `reconnect_required` is true, that is the **last line of your reply** and it is
+  not optional: the MCP server was just repointed and this session is still holding
+  the previous connection, so the ping tools answer from the old plugin version until
+  the user runs **`/mcp reconnect`** (or restarts Claude Code). Say exactly that.
+  If it is false, the connection already points here — don't send them to reconnect.
 
 For `claim`, list each room with its claim link and the same warning.
 
@@ -86,7 +91,7 @@ working on. `scoped_to` in the join output says where.
 - `rooms` — list every room, where it is scoped, and whether it is live here.
 - `here` — rescope the active room to the current directory.
 - `anywhere` — release the active room so it delivers in every project.
-- Finish with: run **/mcp** (reconnect) or restart Claude Code so the tools load — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
+- Finish with: if `reconnect_required`, run **/mcp reconnect** (or restart Claude Code) so the tools load — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
 
 Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping rooms`  ·  `/ping here`  ·  `/ping anywhere`  ·  `/ping off`
 

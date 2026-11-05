@@ -68,21 +68,35 @@ async function callApi(body) {
 // the room key lives on this machine, so the encryption has to happen here,
 // before anything is sent. The proxy reads the token and key from the state
 // file, so neither is passed on a command line or printed into the transcript.
+/**
+ * Point the `ping` MCP server at this copy of the plugin.
+ *
+ * Returns "current" when the registration already named this exact file —
+ * nothing changed, so the session's live connection is the right one — or
+ * "rewired" when it was added or repointed, which the running session cannot
+ * pick up on its own. The path carries the plugin's version number, so a plugin
+ * update silently strands the registration on the old version's cache
+ * directory: the tools keep answering, from code releases out of date. That is
+ * why a rewire has to say "/mcp reconnect" out loud instead of looking fine.
+ */
 async function wireMcp() {
   const server = new URL("./ping-mcp.mjs", import.meta.url).pathname;
+  let had = "";
+  try { had = (await execFileP("claude", ["mcp", "get", "ping"], { timeout: 30_000 })).stdout ?? ""; } catch { /* not registered yet */ }
+  if (had.includes(server)) return "current";
   const args = [
     "mcp", "add", "--transport", "stdio", "ping", "--scope", "user",
     "--", process.execPath, server,
   ];
   try {
     await execFileP("claude", args, { timeout: 30_000 });
-    return true;
+    return "rewired";
   } catch {
     // Already registered (or half-registered) -> remove and retry once.
     try {
       await execFileP("claude", ["mcp", "remove", "ping", "--scope", "user"], { timeout: 30_000 });
       await execFileP("claude", args, { timeout: 30_000 });
-      return true;
+      return "rewired";
     } catch { return false; }
   }
 }
@@ -148,7 +162,10 @@ async function connect(mode, restRaw) {
     owner: res.owner === true,
     active_room: group,
     scoped_to: process.cwd(),
-    mcp_registered: wired,
+    mcp_registered: wired !== false,
+    // True only when the registration actually changed under a running session.
+    reconnect_required: wired === "rewired",
+    ...(wired === "rewired" ? { reconnect_note: "The ping MCP server was just pointed at this plugin version, and this session is still holding the old connection. Run /mcp reconnect — or restart Claude Code — before using the ping tools, or they will answer from the previous version." } : {}),
     rooms_watched: roomsOf(readState()).length,
     encrypted: Boolean(key),
     encryption_note: key
@@ -171,8 +188,8 @@ async function main() {
 
   // Automatic activity updates, off by default. On, every time the agent goes
   // idle the Stop hook reads the session transcript and logs one line — files
-  // edited, commands run, commits made — to the ACTIVE room, at most once every
-  // ten minutes. It never sends file contents, tool output or what you typed.
+  // edited, commands run, commits made — to the ACTIVE room, at most once a
+  // minute. It never sends file contents, tool output or what you typed.
   if (mode === "status") {
     const on = arg.trim().toLowerCase() === "on";
     const off = arg.trim().toLowerCase() === "off";
@@ -184,7 +201,7 @@ async function main() {
       status: on,
       room: room ?? null,
       note: on
-        ? `Auto-updates on. When this agent goes idle it will log what it did — files edited, commands run, commits — to "${room ?? "your active room"}", at most once every 10 minutes. Nothing you type and no file contents are sent. Turn off with /ping status off.`
+        ? `Auto-updates on. When this agent goes idle it will log what it did — files edited, commands run, commits — to "${room ?? "your active room"}", at most once a minute. Nothing you type and no file contents are sent. Turn off with /ping status off.`
         : "Auto-updates off. Nothing is posted unless you ask for it.",
     }, null, 2));
     return;

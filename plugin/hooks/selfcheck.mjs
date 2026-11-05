@@ -4,7 +4,7 @@
 // matching, room dedupe on re-join, and concurrent state writes.
 import assert from "node:assert/strict";
 import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
-import { upsertRoom, roomsOf, VERSION } from "./ping-state.mjs";
+import { upsertRoom, roomsOf, dropRoom, VERSION } from "./ping-state.mjs";
 import { summarize } from "./ping-activity.mjs";
 
 // --- @mention -------------------------------------------------------------
@@ -92,6 +92,23 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
   assert.equal(statusRoom([team], undefined), team, "no active room, one room -> post there");
   assert.equal(statusRoom([team, other], undefined), null, "no active room, several -> never guess");
   assert.equal(statusRoom([], "team"), null, "no rooms -> nothing to post to");
+}
+
+// --- leaving a room ---------------------------------------------------------
+// ping_leave voids the token server-side; the entry used to survive here, so
+// the hooks polled a dead credential and `active` named a room you had left.
+{
+  let s = {};
+  s = upsertRoom(s, { token: "gm_a", group: "team", name: "me" });
+  s = upsertRoom(s, { token: "gm_b", group: "other", name: "me" });
+  assert.equal(s.active, "other", "joined room is active");
+  s = dropRoom(s, "gm_b");
+  assert.equal(roomsOf(s).length, 1, "the room you left is gone");
+  assert.equal(roomsOf(s)[0].token, "gm_a", "and the other one is untouched");
+  assert.equal(s.active, undefined, "active is cleared, never guessed at");
+  assert.equal(dropRoom(s, "gm_nope").rooms.length, 1, "leaving a room twice is harmless");
+  const keep = dropRoom({ active: "team", rooms: [{ token: "gm_a", group: "team" }, { token: "gm_c", group: "c" }] }, "gm_c");
+  assert.equal(keep.active, "team", "leaving a room that wasn't active leaves `active` alone");
 }
 
 // --- the version we report to the server ----------------------------------

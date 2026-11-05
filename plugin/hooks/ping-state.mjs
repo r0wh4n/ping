@@ -117,6 +117,18 @@ export function roomMatchesCwd(room, cwd) {
   return here === base || here.startsWith(base + sep);
 }
 
+// Forget a room. `ping_leave` voids the token server-side; leaving the entry
+// here meant the watcher kept polling a dead credential and `active` still
+// named a room you had left, so nothing you did was posted anywhere.
+export function dropRoom(state, token) {
+  const left = roomsOf(state).find((r) => r.token === token);
+  const rooms = roomsOf(state).filter((r) => r.token !== token);
+  // Clear `active` rather than picking a replacement: with one room left the
+  // hooks fall back to it anyway, and with several, a guess posts your work
+  // into somebody else's room.
+  return { ...state, rooms, active: left && state.active === left.group ? undefined : state.active };
+}
+
 // Add or refresh a room. Dedupes on token AND on group name: re-running /ping
 // with a fresh invite for a room you're already in used to append a second entry
 // with a second membership, and every message then arrived twice.

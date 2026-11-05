@@ -13,7 +13,7 @@
 // Registered by ping-connect.mjs as:
 //   claude mcp add --transport stdio ping -- node <this file>
 import { createInterface } from "node:readline";
-import { readState, updateState, roomsOf, roomMatchesCwd, upsertRoom, VERSION } from "./ping-state.mjs";
+import { readState, updateState, roomsOf, roomMatchesCwd, upsertRoom, dropRoom, VERSION } from "./ping-state.mjs";
 import { keyFrom, keyFromLink, linkWithKey, newRoomKey, openDeep, sealArgs } from "./ping-crypto.mjs";
 
 const REMOTE = process.env.PING_MCP_ENDPOINT ?? "https://theping.chat/mcp";
@@ -147,6 +147,10 @@ async function handleCall(id, params) {
   key = keyFrom(room.key);
   const rpc = await callRemote(name, sealArgs(name, args, key), room.token);
   if (rpc?.error) throw new Error(rpc.error.message ?? "Ping server error.");
+  // Leaving voids this token on the server, so the room has to go from here
+  // too. Without this the hooks kept polling a dead credential forever, and a
+  // later /ping left you in two rooms — one of them gone.
+  if (name === "ping_leave" && !rpc?.result?.isError) updateState((s) => dropRoom(s, room.token));
   return openResult(rpc?.result ?? { content: [] }, key);
 }
 
