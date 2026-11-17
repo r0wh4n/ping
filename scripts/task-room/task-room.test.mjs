@@ -425,3 +425,23 @@ test("CLI exposes parallel as a flag", () => {
   assert.equal(cli.parseOptions(["--task", "x", "--parallel"]).parallel, true);
   assert.ok(!cli.parseOptions(["--task", "x"]).parallel);
 });
+
+test("a parallel agent can see what its peers actually wrote", async (t) => {
+  const cwd = await gitRepo(t);
+  const out = join(await workspace(t), "run");
+  const { agents, timeline } = await slowAgents(t);
+  await core.runRoom({ task: "write files", cwd, agents, rounds: 2, timeoutMs: 30000, outputDir: out, parallel: true, runId: "testrun" });
+
+  // Round 2 is where a reviewer earns its turn. Its peers' files live in
+  // checkouts it cannot open, so the patch has to reach it through the
+  // transcript or it opens with "I found no such file" — which is exactly
+  // what the first live run did.
+  const roundTwo = (await timeline()).filter((e) => e.at === "start").slice(3);
+  assert.equal(roundTwo.length, 3);
+  for (const entry of roundTwo) {
+    for (const peer of ["claude", "codex", "commandcode"]) {
+      assert.match(entry.prompt, new RegExp(`Patch produced by ${peer}`), `${entry.id} must receive ${peer}'s patch`);
+      assert.match(entry.prompt, new RegExp(`work by ${peer}`), `${entry.id} must see the content ${peer} wrote, not just that it wrote something`);
+    }
+  }
+});

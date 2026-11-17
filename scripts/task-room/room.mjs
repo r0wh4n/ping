@@ -1,7 +1,7 @@
 import { mkdir, open, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { AGENTS, clean, runAgent } from "./agents.mjs";
-import { addWorktree, branchFor, commitWork, isRepo, removeWorktree } from "./worktree.mjs";
+import { addWorktree, branchFor, commitWork, diffSince, headSha, isRepo, removeWorktree } from "./worktree.mjs";
 
 export function promptFor({ task, agent, round, rounds, history, workspace }) {
   const parts = [];
@@ -24,7 +24,9 @@ their edits and they will not see yours, so do not wait for them, do not read
 files expecting their work, and do not try to coordinate through the filesystem.
 Say what you need from them in your handoff instead. Do not commit, switch
 branch, or touch the worktree: the coordinator commits your changes to your
-branch when your turn ends.`
+branch when your turn ends. If your job is to review or verify someone else's
+work, read the peer diffs in the transcript below -- that is where their code
+is. Do not go looking for their files, and do not report their work missing.`
     : `All participants use the same workspace, one at a time. Inspect current files
 before editing. Keep other agents' work and address their concrete feedback.`;
   return `You are ${agent.id} in a Ping task room. Round ${round} of ${rounds}.
@@ -95,7 +97,14 @@ export async function runRoom({ task, cwd, agents, rounds = 2, timeoutMs = 30000
     if (workspace) {
       try {
         const sha = await commitWork({ dir: workspace.dir, message: `${agent.id}: round ${round} of ${rounds}\n\n${task}`.slice(0, 2000) });
-        if (sha) { workspace.commits.push(sha); await emit({ type: "commit", agent: agent.id, round, branch: workspace.branch, sha }); }
+        if (sha) {
+          workspace.commits.push(sha);
+          await emit({ type: "commit", agent: agent.id, round, branch: workspace.branch, sha });
+          // Put the patch in the transcript. It is the only way the next round's
+          // reviewer sees code that exists solely in another agent's checkout.
+          const diff = await diffSince({ dir: workspace.dir, base });
+          if (diff.trim()) history.push({ agent: `${agent.id} (branch ${workspace.branch})`, text: `Patch produced by ${agent.id}:\n${diff}` });
+        }
       } catch (error) { if (!signal?.aborted) await warning(error); }
     }
     if (bridge && !signal?.aborted) {
@@ -104,9 +113,11 @@ export async function runRoom({ task, cwd, agents, rounds = 2, timeoutMs = 30000
     }
   };
 
+  let base;
   try {
     await emit({ type: "start", task: clean(task), cwd, agents: agents.map((a) => a.id), rounds, parallel });
     if (parallel) {
+      base = await headSha(cwd);
       for (const agent of agents) {
         const branch = branchFor(runId, agent.id);
         const dir = join(outputDir, "worktrees", agent.id);

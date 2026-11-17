@@ -48,3 +48,18 @@ export async function commitWork({ dir, message }) {
 export async function removeWorktree({ cwd, dir }) {
   await run(["worktree", "remove", "--force", dir], cwd);
 }
+
+export const headSha = async (cwd) => (await run(["rev-parse", "HEAD"], cwd)).trim();
+
+/**
+ * What this agent actually wrote, as a patch against the starting commit.
+ *
+ * A reviewer in a parallel run cannot read its peers' files -- they are in
+ * checkouts it will never see -- so without this it opens round two with
+ * "I found no such file" and burns a turn. The diff travels in the transcript
+ * instead, which is the one channel every agent does share.
+ */
+export async function diffSince({ dir, base, limit = 8000 }) {
+  const out = await run(["diff", `${base}..HEAD`], dir);
+  return out.length > limit ? `${out.slice(0, limit)}\n[diff truncated at ${limit} characters]` : out;
+}

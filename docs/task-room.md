@@ -63,10 +63,19 @@ git merge ping/2c582d68/codex         # take it
 ```
 
 An agent that fails does not stop the others; the run reports `partial` and the
-remaining branches are still there. With `--rounds 2` the round boundary is a
-barrier: every agent in round 2 starts from the same history, containing all of
-round 1's handoffs. Your own working tree is never touched, and `--parallel`
-needs a git repository — it refuses rather than quietly running one at a time.
+remaining branches are still there. Your own working tree is never touched, and
+`--parallel` needs a git repository — it refuses rather than quietly running one
+at a time.
+
+**Reviewers need two rounds.** The default roles are a relay — planner,
+implementer, reviewer, verifier — and in a parallel round 1 everyone starts
+from the same commit, so a reviewer has nothing to read and says so. Give it
+`--rounds 2`: the round boundary is a barrier, and every agent in round 2
+starts from the same history, carrying round 1's handoffs *and the patch each
+agent committed*. Peers' files are in checkouts nobody else can open, so the
+diff travels in the transcript instead. That is what lets a reviewer compare
+two implementations of the same task and say which to merge. For a single
+round, pick agents that all implement: `--agents claude,codex`.
 
 `--timeout` is seconds per turn (default 300); `--rounds` is 1–10. `--dry-run`
 prints the plan without launching agents, joining a room or writing a
