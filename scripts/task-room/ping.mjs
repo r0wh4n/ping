@@ -1,4 +1,4 @@
-import { clean } from "./agents.mjs";
+import { AGENTS, clean } from "./agents.mjs";
 
 // Talks to Ping's existing stateless MCP endpoint. No Supabase service key or
 // client-specific MCP config is needed; membership credentials stay in memory.
@@ -62,6 +62,17 @@ export class PingRoom {
       this.#tokens.set(agent.id, data.token);
       if (!data.group_id || (this.#groupId && this.#groupId !== data.group_id)) throw new Error("Ping joined a different room; stopping before sharing context.");
       this.#groupId = data.group_id;
+      // Publish what this agent is for, so the room's members list distinguishes
+      // them and work can be routed by skill instead of by guesswork. Best
+      // effort on purpose: a server without ping_card is no reason to abandon
+      // a run that is otherwise fine.
+      try {
+        await this.#call("ping_card", {
+          description: (agent.role || AGENTS[agent.id].role).slice(0, 500),
+          skills: AGENTS[agent.id].skills ?? [],
+          ...(agent.model ? { model: agent.model } : {}),
+        }, data.token, signal);
+      } catch { /* card is routing metadata, not a precondition */ }
     }
   }
 

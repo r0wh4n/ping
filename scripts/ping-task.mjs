@@ -14,6 +14,7 @@ const HELP = `Ping task room — run your coding agents on one task (Node 22+, m
 
   --agents LIST     Turn order (default: claude,codex,commandcode,opencode)
   --rounds N        Rounds through all agents, 1–10 (default: 2)
+  --parallel        Run every agent at once, each in its own git worktree
   --timeout N       Seconds per agent turn, 1–3600 (default: 300)
   --config FILE     JSON with per-agent command, args, model and role overrides
   --out DIR         New transcript directory (default: ~/.ping/tasks/<run-id>)
@@ -23,7 +24,9 @@ const HELP = `Ping task room — run your coding agents on one task (Node 22+, m
   --help           Show this help
 
 Uses each CLI's existing login and permissions. No permission bypass is added.
-Runs one agent at a time in the same workspace; Ctrl-C cancels the current turn.
+By default one agent runs at a time in the same workspace. With --parallel they
+all run at once, each on its own branch in its own git worktree, and the
+coordinator commits what each leaves behind for you to merge. Ctrl-C cancels.
 "finished" means all turns ran, not that the agents proved the task correct.
 `;
 
@@ -34,6 +37,7 @@ export function parseOptions(argv) {
   for (let i = 0; i < argv.length; i++) {
     const key = argv[i].startsWith("--") ? argv[i].slice(2) : "";
     if (key === "dry-run") { options.dryRun = true; continue; }
+    if (key === "parallel") { options.parallel = true; continue; }
     if (!values.has(key)) throw new Error(`Unknown option: ${argv[i]}`);
     const value = argv[++i];
     if (!value || value.startsWith("--")) throw new Error(`Missing value for --${key}.`);
@@ -66,25 +70,36 @@ export async function main(argv = process.argv.slice(2)) {
   const agents = options.agents.map((id) => ({ id, ...config.agents?.[id] }));
   const bridge = options.room ? new PingRoom({ link: options.room, endpoint: options.endpoint }) : undefined;
   if (options.dryRun) {
-    console.log(JSON.stringify({ cwd, task: options.task, rounds: options.rounds, timeout: options.timeout, sharedRoom: Boolean(bridge), agents: agents.map((a) => ({ id: a.id, role: a.role || AGENTS[a.id].role, ...invocationFor(a, "[shared task and transcript]") })) }, null, 2));
+    console.log(JSON.stringify({ cwd, task: options.task, rounds: options.rounds, timeout: options.timeout, parallel: Boolean(options.parallel), sharedRoom: Boolean(bridge), agents: agents.map((a) => ({ id: a.id, role: a.role || AGENTS[a.id].role, ...invocationFor(a, "[shared task and transcript]") })) }, null, 2));
     return 0;
   }
   const controller = new AbortController();
   const cancel = () => controller.abort();
   process.once("SIGINT", cancel);
   process.once("SIGTERM", cancel);
-  const outputDir = options.out ? resolve(options.out) : join(homedir(), ".ping", "tasks", randomUUID());
-  console.log(`Task room: ${outputDir}\nWorkspace: ${cwd}\nOrder: ${agents.map((a) => a.id).join(" → ")}`);
+  const runId = randomUUID();
+  const outputDir = options.out ? resolve(options.out) : join(homedir(), ".ping", "tasks", runId);
+  console.log(`Task room: ${outputDir}\nWorkspace: ${cwd}\n${options.parallel ? `In parallel: ${agents.map((a) => a.id).join(", ")}` : `Order: ${agents.map((a) => a.id).join(" → ")}`}`);
   try {
     const result = await runRoom({
       task: options.task, cwd, agents, rounds: options.rounds, timeoutMs: options.timeout * 1000,
-      outputDir, signal: controller.signal, bridge,
+      outputDir, signal: controller.signal, bridge, parallel: Boolean(options.parallel), runId: runId.slice(0, 8),
       onEvent(event) {
+        if (event.type === "worktree") console.log(`[${event.agent}] branch ${event.branch}`);
         if (event.type === "turn") console.log(`\n[${event.agent} · round ${event.round}/${options.rounds}] working…`);
-        if (["reply", "failure", "warning"].includes(event.type)) console.log(clean(event.text));
+        if (event.type === "commit") console.log(`[${event.agent}] committed ${event.sha} on ${event.branch}`);
+        // In parallel every reply lands whenever its agent finishes, so say who
+        // is talking -- otherwise three handoffs arrive as one wall of text.
+        if (["reply", "failure"].includes(event.type)) console.log(`${options.parallel ? `\n--- ${event.agent} ---\n` : ""}${clean(event.text)}`);
+        if (event.type === "warning") console.log(clean(event.text));
       },
     });
     console.log(`\n${result.status}: ${result.replies} replies, ${result.failures} failed turns, ${result.integrationFailures} room errors.\nTranscript: ${result.transcript}`);
+    const worked = result.branches?.filter((b) => b.commits.length) ?? [];
+    if (result.branches?.length) {
+      console.log(`\nBranches: ${result.branches.map((b) => `${b.branch} (${b.commits.length || "no"} commit${b.commits.length === 1 ? "" : "s"})`).join(", ")}`);
+      if (worked.length) console.log(`Review and merge:  ${worked.map((b) => `git diff ${b.branch}`).join("  ·  ")}`);
+    }
     return result.status === "cancelled" ? 130 : result.status === "finished" ? 0 : 1;
   } finally {
     process.removeListener("SIGINT", cancel);

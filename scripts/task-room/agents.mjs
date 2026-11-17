@@ -1,11 +1,14 @@
 import { spawn } from "node:child_process";
 import { stripVTControlCharacters } from "node:util";
 
+// `skills` is published to the room as each agent's capability card, so the
+// members list shows what every agent is for and ping_task can be matched
+// against it. A card advertises capability; it does not grant permission.
 export const AGENTS = {
-  claude: { role: "Plan the approach, identify constraints, and resolve open design questions. On later rounds check the implementation against the task." },
-  codex: { role: "Implement the agreed changes in the workspace. Address concrete feedback from the other agents." },
-  commandcode: { role: "Review the current changes for correctness and maintainability. Give concrete findings with file references and suggested fixes." },
-  opencode: { role: "Verify the changes with the project's checks where permitted. Report commands actually run, results, and remaining gaps." },
+  claude: { role: "Plan the approach, identify constraints, and resolve open design questions. On later rounds check the implementation against the task.", skills: ["planning", "design", "review"] },
+  codex: { role: "Implement the agreed changes in the workspace. Address concrete feedback from the other agents.", skills: ["implementation", "refactoring"] },
+  commandcode: { role: "Review the current changes for correctness and maintainability. Give concrete findings with file references and suggested fixes.", skills: ["code-review", "correctness"] },
+  opencode: { role: "Verify the changes with the project's checks where permitted. Report commands actually run, results, and remaining gaps.", skills: ["verification", "tests"] },
 };
 
 export function clean(text) {

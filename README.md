@@ -33,8 +33,14 @@ handoffs. A local run needs no model API key or database setup.
 node scripts/ping-task.mjs --cwd /path/to/repo --task "Fix the bug, review it, and run the checks"
 ```
 
+Add `--parallel` and they all work at once instead, each in its own git
+worktree on its own branch, so the run takes as long as the slowest agent
+rather than the sum of them. The coordinator commits what each one leaves
+behind; you merge the branches you want.
+
 Add `--room <invite-link>` to share the task and replies with an existing Ping
-room, including interactive agents connected through MCP. Choose participants
+room, including interactive agents connected through MCP — each agent publishes
+its capability card, so the room can route work by skill. Choose participants
 with `--agents codex,claude`; preview the plan with `--dry-run`.
 
 [Task runner setup, roles, permissions and tests →](docs/task-room.md)

@@ -314,3 +314,114 @@ test("MCP errors, mismatched rooms and JSON replies are handled without credenti
   mode = "http";
   await assert.rejects(bridge.close(), /memberships/);
 });
+
+// --- parallel mode ---------------------------------------------------------
+// The sequential coordinator is safe because only one agent can touch the files.
+// Parallel removes that guarantee, so these cover the two things that replace
+// it: a real worktree per agent, and work that survives the worktree.
+
+async function gitRepo(t) {
+  const dir = await workspace(t);
+  await execFileAsync("git", ["init", "-q", "-b", "main"], { cwd: dir });
+  await execFileAsync("git", ["config", "user.email", "test@example.invalid"], { cwd: dir });
+  await execFileAsync("git", ["config", "user.name", "Ping Test"], { cwd: dir });
+  await writeFile(join(dir, "README.md"), "base\n");
+  await execFileAsync("git", ["add", "-A"], { cwd: dir });
+  await execFileAsync("git", ["commit", "-q", "--no-verify", "-m", "base"], { cwd: dir });
+  return dir;
+}
+
+// Agents live outside the repository so their own source is not what gets
+// committed, and they log to one shared file so overlap in time is observable.
+async function slowAgents(t, ids = ["claude", "codex", "commandcode"]) {
+  const home = await workspace(t);
+  const log = join(home, "timeline.jsonl");
+  const file = join(home, "agent.mjs");
+  await writeFile(file, `
+import { readFileSync, appendFileSync, writeFileSync } from 'node:fs';
+const [id, log] = process.argv.slice(2, 4);
+const prompt = readFileSync(0, 'utf8');
+appendFileSync(log, JSON.stringify({ id, at: 'start', t: Date.now(), cwd: process.cwd(), prompt }) + '\\n');
+await new Promise((r) => setTimeout(r, 250));
+writeFileSync(id + '.txt', 'work by ' + id);
+appendFileSync(log, JSON.stringify({ id, at: 'end', t: Date.now() }) + '\\n');
+const text = id + ' handed off';
+const event = id === 'codex' ? { type: 'item.completed', item: { type: 'agent_message', text } }
+  : id === 'commandcode' ? { type: 'result', subtype: 'success', finalText: text }
+  : { type: 'result', subtype: 'success', result: text };
+console.log(JSON.stringify(event));
+`);
+  const agents = ids.map((id) => ({ id, command: process.execPath, args: [file, id, log], role: `Work as ${id}` }));
+  const timeline = async () => (await readFile(log, "utf8")).split("\n").filter(Boolean).map((l) => JSON.parse(l));
+  return { agents, timeline };
+}
+
+test("parallel agents run at the same time, each in its own worktree", async (t) => {
+  const cwd = await gitRepo(t);
+  const out = join(await workspace(t), "run");
+  const { agents, timeline } = await slowAgents(t);
+  const result = await core.runRoom({ task: "do the thing", cwd, agents, rounds: 1, timeoutMs: 30000, outputDir: out, parallel: true, runId: "testrun" });
+
+  assert.equal(result.status, "finished", "parallel run should finish");
+  assert.equal(result.replies, 3);
+  const events = await timeline();
+  const lastStart = Math.max(...events.filter((e) => e.at === "start").map((e) => e.t));
+  const firstEnd = Math.min(...events.filter((e) => e.at === "end").map((e) => e.t));
+  assert.ok(lastStart < firstEnd, "every agent must still be running when the last one starts — otherwise this is just the sequential runner");
+
+  const dirs = new Set(events.filter((e) => e.at === "start").map((e) => e.cwd));
+  assert.equal(dirs.size, 3, "each agent needs its own checkout, not a shared one");
+  for (const dir of dirs) assert.notEqual(dir, cwd, "no agent may run in the user's own working tree");
+});
+
+test("a parallel agent's work is committed to its branch and the worktree is cleaned up", async (t) => {
+  const cwd = await gitRepo(t);
+  const out = join(await workspace(t), "run");
+  const { agents } = await slowAgents(t);
+  const result = await core.runRoom({ task: "write the files", cwd, agents, rounds: 1, timeoutMs: 30000, outputDir: out, parallel: true, runId: "testrun" });
+
+  assert.equal(result.branches.length, 3);
+  for (const { agent, branch, commits } of result.branches) {
+    assert.equal(branch, `ping/testrun/${agent}`);
+    assert.equal(commits.length, 1, `${agent} changed a file, so it must have a commit`);
+    const { stdout } = await execFileAsync("git", ["show", "--name-only", "--format=", branch], { cwd });
+    assert.match(stdout, new RegExp(`${agent}\\.txt`), `${agent}'s file must be on its own branch`);
+    // The point of a branch per agent: nobody else's work is on it.
+    for (const other of result.branches.filter((b) => b.agent !== agent)) {
+      assert.doesNotMatch(stdout, new RegExp(`${other.agent}\\.txt`), "branches must not contain each other's work");
+    }
+  }
+  const { stdout: worktrees } = await execFileAsync("git", ["worktree", "list"], { cwd });
+  assert.equal(worktrees.trim().split("\n").length, 1, "worktrees must be removed once their branch holds the work");
+  assert.equal(await stat(join(cwd, "claude.txt")).catch(() => null), null, "the user's working tree must be left untouched");
+});
+
+test("every agent in a parallel round starts from the same history", async (t) => {
+  const cwd = await gitRepo(t);
+  const out = join(await workspace(t), "run");
+  const { agents, timeline } = await slowAgents(t);
+  await core.runRoom({ task: "two rounds", cwd, agents, rounds: 2, timeoutMs: 30000, outputDir: out, parallel: true, runId: "testrun" });
+
+  const starts = (await timeline()).filter((e) => e.at === "start");
+  assert.equal(starts.length, 6, "three agents, two rounds");
+  for (const entry of starts.slice(3)) {
+    for (const id of ["claude", "codex", "commandcode"]) {
+      assert.match(entry.prompt, new RegExp(`${id} handed off`), `round 2 must see every round-1 reply, not a race-dependent subset (${entry.id} missed ${id})`);
+    }
+  }
+  assert.match(starts[0].prompt, /OWN checkout/, "a parallel agent must be told the other agents' edits are invisible to it");
+});
+
+test("parallel refuses a workspace that is not a git repository", async (t) => {
+  const cwd = await workspace(t);
+  const out = join(await workspace(t), "run");
+  const { agents } = await slowAgents(t, ["claude"]);
+  await assert.rejects(
+    () => core.runRoom({ task: "x", cwd, agents, rounds: 1, timeoutMs: 30000, outputDir: out, parallel: true, runId: "testrun" }),
+    /git repository/, "without a repo there is nowhere to isolate agents, and it must say so instead of silently serialising");
+});
+
+test("CLI exposes parallel as a flag", () => {
+  assert.equal(cli.parseOptions(["--task", "x", "--parallel"]).parallel, true);
+  assert.ok(!cli.parseOptions(["--task", "x"]).parallel);
+});
