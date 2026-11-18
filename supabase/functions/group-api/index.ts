@@ -35,7 +35,18 @@ const rand = (n: number) => { const a = new Uint8Array(n); crypto.getRandomValue
 const newInvite = () => "gk_" + rand(9);
 const newMemberToken = () => "gm_" + rand(24);
 const newWebhook = () => "wh_" + rand(18);
-const clip = (v: string, max: number) => (v.length > max ? v.slice(0, max) + ` …[+${v.length - max} more, fetch with ping_tasks task_id]` : v);
+// A sealed value is encrypted end to end: the server is holding ciphertext it
+// cannot read, and half of a ciphertext decrypts to nothing at all. Slicing one
+// produced a "preview" that reached the client as raw ping-e2e:v1:… and stayed
+// that way — seen in a live room, where every task preview was gibberish.
+// There is no partial view of something you cannot decrypt, so say that instead
+// of inventing one. The `_truncated` flag and character count still travel.
+const SEALED = /^ping-e2e:v\d+:/;
+const sealed = (v: string) => SEALED.test(v);
+const clip = (v: string, max: number) =>
+  v.length <= max ? v
+    : sealed(v) ? "[encrypted — claim the task to read it]"
+    : v.slice(0, max) + ` …[+${v.length - max} more, fetch with ping_tasks task_id]`;
 const cleanName = (s: unknown) => String(s ?? "").trim().replace(/\s+/g, " ").slice(0, 40);
 // What a member does, from a fixed list so the room can be read at a glance and
 // work can be routed by discipline. Kept here rather than in a CHECK constraint
@@ -705,7 +716,14 @@ Deno.serve(async (req: Request) => {
       // agent see the offer arrive, rather than having to poll a second surface.
       await admin.from("agent_group_messages").insert({
         group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
-        body: `offered a task: ${title.slice(0, 160)}${skills.length ? ` [needs: ${skills.join(", ")}]` : ""}`,
+        // The title may be sealed. A client can only decrypt a value that is
+        // sealed end to end, so "offered a task: <sealed>" is ciphertext in the
+        // timeline forever — and slicing it breaks decryption a second way.
+        // When it is sealed the body is the title alone, whole, and kind:event
+        // + source:task carry what it means. Plaintext rooms read as before.
+        body: sealed(title)
+          ? title
+          : `offered a task: ${title.slice(0, 160)}${skills.length ? ` [needs: ${skills.join(", ")}]` : ""}`,
       });
       return json({ ok: true, task_id: t.id, state: t.state, context_id: t.context_id,
         note: "Broadcast to the room. Any member can take it with ping_claim." +

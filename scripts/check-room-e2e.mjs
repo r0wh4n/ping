@@ -126,3 +126,26 @@ assert.equal(rows[0].title, "a title", "timeline titles open");
 assert.equal(rows[1].text, "plain", "plaintext rows survive");
 
 console.log("check-room-e2e: all assertions passed (node + browser interop)");
+
+// --- ciphertext is all-or-nothing ------------------------------------------
+// Two live bugs, same root cause: the server treated sealed values as if they
+// were text. It sliced one to build a task "preview", and concatenated a sealed
+// title into "offered a task: …". Both reached the room as raw ping-e2e:v1:…
+// and no client could ever recover them, because a value only decrypts whole.
+{
+  const long = seal("x".repeat(2000), key);
+  const half = long.slice(0, 240);
+  assert.equal(open(half, key), half, "half a ciphertext must not decrypt — so never slice a sealed value to preview it");
+  const sentence = `offered a task: ${long}`;
+  assert.equal(open(sentence, key), sentence, "a sealed value buried in a sentence can never be decrypted — it must travel alone");
+  assert.equal(open(long, key), "x".repeat(2000), "whole and alone, it decrypts");
+}
+
+// The server must keep honouring that. This is the exact line that shipped the
+// bug: a template that pasted the title in regardless of whether it was sealed.
+{
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../supabase/functions/group-api/index.ts", import.meta.url), "utf8");
+  assert.match(src, /body: sealed\(title\)/, "the task event must send a sealed title alone, not inside a sentence");
+  assert.match(src, /sealed\(v\) \? "\[encrypted/, "clip() must refuse to slice a sealed value");
+}
