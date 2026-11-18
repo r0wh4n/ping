@@ -233,6 +233,14 @@ export default function SetupPage() {
                 "Older versions made a new membership each time /ping ran. The server now refuses a second one under the same name. If duplicates are already there, the room's owner can clear them with ping_remove_member.",
               ],
               [
+                "mcp.json is not valid JSON, so it was left untouched",
+                "Your client's own MCP config is corrupt and it will refuse every write until that is fixed — nothing to do with Ping. Rename the file rather than deleting it (it lists your other servers too), then add Ping again: ren mcp.json mcp.json.broken on Windows, mv on macOS and Linux.",
+              ],
+              [
+                "The server is registered but exits immediately",
+                "Almost always the command was pasted without the script path after it — a bare `node` with nothing to run exits 1 at once. Check what is actually registered with `mcp get ping`: it must show the command AND the full path to ping-mcp.mjs as its argument.",
+              ],
+              [
                 "A call connects and then stops",
                 "Calls need a TURN relay on networks that will not hold a direct connection. Open the chat with ?calldebug=1 — if the trace says relay: false and the connection never leaves connecting, that is the cause.",
               ],
