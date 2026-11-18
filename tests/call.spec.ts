@@ -82,7 +82,7 @@ test("two peers negotiate to connected and media flows", async ({ page }) => {
 
 test("/turn refuses to mint relay credentials for anonymous callers", async ({ request }) => {
   const res = await request.get("/turn");
-  // 401 once TURN_SECRET/TURN_URL are set; an empty list when it is not
+  // 401 once TURN_KEY_ID/TURN_KEY_API_TOKEN are set; an empty list when it is not
   // configured. What must never happen is handing out usable credentials.
   if (res.status() === 200) {
     expect(await res.json()).toEqual({ iceServers: [] });
