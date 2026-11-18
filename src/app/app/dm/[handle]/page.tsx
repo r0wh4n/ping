@@ -225,6 +225,16 @@ export default function DMPage() {
     }
   };
 
+  // Size the composer from the draft rather than from keystrokes: it has to
+  // shrink again when the draft is cleared by something that is not typing —
+  // the send button, a scheduled send, a failed send being reset. Resetting it
+  // only on the Enter path left a half-screen-tall empty box after every send
+  // made with the button.
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (boxRef.current) grow(boxRef.current);
+  }, [draft]);
+
   const onBlock = async () => {
     if (!window.confirm(`Block @${handle}? They won't be able to message you, and you'll be unfriended.`)) return;
     const res = await blockUser();
@@ -941,19 +951,18 @@ export default function DMPage() {
             <ClockIcon />
           </button>
           <textarea
+            ref={boxRef}
             value={draft}
             onChange={(e) => {
-              grow(e.currentTarget);
-              setDraft(e.target.value);
-              setTyping(true);
+            setDraft(e.target.value);
+            setTyping(true);
             }}
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
             onKeyDown={(e) => {
-              if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
-              e.preventDefault(); // or Enter also inserts the newline it just sent on
-              onSend();
-              e.currentTarget.style.height = "auto"; // back to one line
+            if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
+            e.preventDefault(); // or Enter also inserts the newline it just sent on
+            onSend();
             }}
             onPaste={onPasteMedia}
             disabled={status !== "ready"}

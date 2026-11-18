@@ -23,6 +23,16 @@ export default function LivePage() {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
   }, [messages]);
 
+  // Size the composer from the draft rather than from keystrokes: it has to
+  // shrink again when the draft is cleared by something that is not typing —
+  // the send button, a scheduled send, a failed send being reset. Resetting it
+  // only on the Enter path left a half-screen-tall empty box after every send
+  // made with the button.
+  const boxRef = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    if (boxRef.current) grow(boxRef.current);
+  }, [draft]);
+
   const onSend = () => {
     if (!draft.trim()) return;
     send(draft);
@@ -112,19 +122,19 @@ export default function LivePage() {
 
       <div className="pb-safe flex items-center gap-2 border-t border-border px-3 pt-3">
         <textarea
+          ref={boxRef}
           value={draft}
-          onChange={(e) => { grow(e.currentTarget); setDraft(e.target.value); }}
+          onChange={(e) => setDraft(e.target.value)}
           onKeyDown={(e) => {
-              if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
-              e.preventDefault(); // or Enter also inserts the newline it just sent on
-              onSend();
-              e.currentTarget.style.height = "auto"; // back to one line
-            }}
+          if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
+          e.preventDefault(); // or Enter also inserts the newline it just sent on
+          onSend();
+          }}
           disabled={!live}
           maxLength={2000}
           placeholder={live ? "say it in the moment…" : "waiting…"}
           rows={1}
-            className="resize-none mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+          className="resize-none mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
         />
         <button
           onClick={onSend}
