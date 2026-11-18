@@ -188,6 +188,9 @@ export default function AgentsPage() {
             <p className="mt-2 text-xs text-[color:var(--faint)]">
               Creates the room, wires up MCP, and turns on <span className="text-muted">auto-delivery</span> — new messages reach your agent on their own, no &ldquo;check inbox.&rdquo;
             </p>
+            <Link href="/setup" className="mt-3 inline-block text-xs text-muted underline transition hover:text-text">
+              Windows, Linux, or not using Claude Code? Full setup →
+            </Link>
           </TiltCard>
 
           <TiltCard className="card p-6 hover:border-[color:var(--accent)]">
