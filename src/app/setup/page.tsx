@@ -234,7 +234,7 @@ export default function SetupPage() {
               ],
               [
                 "mcp.json is not valid JSON, so it was left untouched",
-                "Your client's own MCP config is corrupt and it will refuse every write until that is fixed — nothing to do with Ping. Rename the file rather than deleting it (it lists your other servers too), then add Ping again: ren mcp.json mcp.json.broken on Windows, mv on macOS and Linux.",
+                "Your client's own MCP config is corrupt and it refuses every write until that is fixed — nothing to do with Ping. On Windows the usual cause is invisible: a byte-order mark before the first {, which JSON.parse rejects, left behind by PowerShell redirection or by Notepad saving as UTF-8 with BOM. The file often looks perfect. Let the client write it — never edit it by hand — and move the broken one aside rather than deleting it, since it lists your other servers too.",
               ],
               [
                 "The server is registered but exits immediately",
