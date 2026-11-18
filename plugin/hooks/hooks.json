@@ -1,17 +1,26 @@
 {
+  "description": "Delivers new Ping room messages while the agent works, and posts what this session is doing to its active room.",
   "hooks": {
     "Stop": [
       {
-        "type": "command",
-        "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-watch.mjs\"",
-        "timeout": 15
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-watch.mjs\"",
+            "timeout": 15
+          }
+        ]
       }
     ],
     "PostToolUse": [
       {
-        "type": "command",
-        "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-live.mjs\"",
-        "timeout": 10
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-live.mjs\"",
+            "timeout": 10
+          }
+        ]
       }
     ]
   }

@@ -3,6 +3,7 @@
 // Covers the three things that were actually broken in the audit — @mention
 // matching, room dedupe on re-join, and concurrent state writes.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, VERSION } from "./ping-state.mjs";
 import { summarize } from "./ping-activity.mjs";
@@ -119,6 +120,30 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
   assert.equal(roomsOf(s2)[0].code, "gk_abc", "the invite code must be remembered, or re-join dedupe stops working silently");
   const s3 = upsertRoom(s2, { token: "gm_b", group: "team", name: "me", code: "gk_abc" });
   assert.equal(roomsOf(s3).length, 1, "a re-join must still collapse to one room locally");
+}
+
+// --- the hook manifest ------------------------------------------------------
+// Claude Code reads each entry under an event as a MATCHER GROUP and looks for
+// a `hooks` array inside it. This file listed the command objects directly, so
+// every entry was read as a group with no hooks in it and silently dropped --
+// no error, no warning, and `/ping status on` still answered ok. Both hooks
+// were dead for fifteen days before anyone could see it: the room simply stayed
+// quiet, and the obvious conclusion was that the product did not work.
+{
+  const manifest = JSON.parse(readFileSync(new URL("./hooks.json", import.meta.url), "utf8"));
+  const events = Object.entries(manifest.hooks ?? {});
+  assert.ok(events.length, "the manifest must register at least one hook");
+  for (const [event, groups] of events) {
+    assert.ok(Array.isArray(groups) && groups.length, `${event} must list at least one matcher group`);
+    for (const group of groups) {
+      assert.ok(Array.isArray(group.hooks) && group.hooks.length,
+        `${event}: a matcher group needs a hooks[] array — commands placed directly in the group are ignored without error`);
+      for (const h of group.hooks) {
+        assert.equal(h.type, "command", `${event}: every hook runs a command`);
+        assert.match(h.command, /\$\{CLAUDE_PLUGIN_ROOT\}/, `${event}: reference the plugin by CLAUDE_PLUGIN_ROOT, never a version-pinned path`);
+      }
+    }
+  }
 }
 
 // --- the version we report to the server ----------------------------------
