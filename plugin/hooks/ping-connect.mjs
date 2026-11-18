@@ -53,16 +53,22 @@ async function displayName() {
   return (who || "agent").slice(0, 60);
 }
 
-async function callApi(body) {
+async function callApi(body, token) {
   // curl via execFile: the JSON body is one argv element, never parsed by a shell.
   const out = await run("curl", [
     "-s", "-X", "POST", API,
     "-H", `apikey: ${ANON}`,
     "-H", "Content-Type: application/json",
+    ...(token ? ["-H", `Authorization: Bearer ${token}`] : []),
     "-d", JSON.stringify(body),
   ]);
   try { return JSON.parse(out); } catch { return null; }
 }
+
+// Does this membership still exist on the server? A token survives in the state
+// file long after the room was deleted or the member removed, and re-joining on
+// a dead one is correct — so this has to be asked before deciding not to join.
+const tokenAlive = async (token) => (await callApi({ action: "whoami" }, token))?.ok === true;
 
 // Register the MCP server. This is the local sealing proxy, not the hosted URL:
 // the room key lives on this machine, so the encryption has to happen here,
@@ -130,6 +136,34 @@ async function connect(mode, restRaw) {
   if (mode === "join") {
     const code = extractCode(rest);
     if (!code) die("That doesn't look like a Ping invite. Expected a link containing gk_… — check the link and try again.");
+    // Already in this room from this machine? Running /ping again is what
+    // everybody does when they are not sure the first one worked, and every
+    // run used to mint ANOTHER membership server-side: the first real two-person
+    // test ended with six member rows for two people, and a member list that
+    // could not tell one person who joined three times from three people.
+    //
+    // The server cannot fix this. Returning the existing token to whoever asks
+    // would hand anyone holding the invite link another member's identity, and
+    // voiding the old membership would let them kick that member out. Both are
+    // worse than the duplicate. Here, though, we already hold the token, so
+    // there is nothing to hand out and nothing to guess.
+    const mine = roomsOf(readState()).find((r) => r.code === code && r.token);
+    if (mine && (await tokenAlive(mine.token))) {
+      // Make it active, but DO NOT touch where it is scoped. Re-running /ping
+      // inside a subdirectory would otherwise silently narrow a room that was
+      // deliberately widened with `/ping anywhere` — and the person doing it is
+      // only trying to check the room still works. /ping here and /ping
+      // anywhere already exist for changing scope on purpose.
+      updateState((s) => upsertRoom(s, { ...mine }));
+      const wired = await wireMcp();
+      console.log(JSON.stringify({
+        ok: true, already_member: true, connected_as: mine.name ?? null, active_room: mine.group,
+        scoped_to: mine.path ?? "every project on this machine", mcp_registered: wired !== false, reconnect_required: wired === "rewired",
+        rooms_watched: roomsOf(readState()).length, encrypted: Boolean(mine.key),
+        note: "You were already in this room on this machine, so no second membership was created — the room is just active here now. To join as somebody else, or from scratch, leave it first with ping_leave.",
+      }, null, 2));
+      return;
+    }
     res = await callApi({ action: "join", link: code, name, role });
   } else {
     const group = String(rest || "").trim().slice(0, 80);
@@ -149,6 +183,9 @@ async function connect(mode, restRaw) {
   // (and its write token) would be delivered into unrelated work.
   updateState((s) => upsertRoom(s, {
     token: res.token, group, name, key: key ?? undefined,
+    // The invite code is what identifies the room BEFORE a join tells us its
+    // name, so it is the only thing a re-join can be matched against.
+    ...(mode === "join" ? { code: extractCode(rest) } : {}),
     path: process.cwd(), last_seen: new Date().toISOString(),
   }));
 
@@ -163,6 +200,9 @@ async function connect(mode, restRaw) {
     active_room: group,
     scoped_to: process.cwd(),
     mcp_registered: wired !== false,
+    // The server counts members sharing this name and says so. It was being
+    // thrown away here, which is why six duplicates accumulated unnoticed.
+    ...(res.warning ? { warning: res.warning } : {}),
     // True only when the registration actually changed under a running session.
     reconnect_required: wired === "rewired",
     ...(wired === "rewired" ? { reconnect_note: "The ping MCP server was just pointed at this plugin version, and this session is still holding the old connection. Run /mcp reconnect — or restart Claude Code — before using the ping tools, or they will answer from the previous version." } : {}),

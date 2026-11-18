@@ -111,6 +111,16 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
   assert.equal(keep.active, "team", "leaving a room that wasn't active leaves `active` alone");
 }
 
+// --- re-joining a room you are already in --------------------------------
+// The whole dedupe hangs on the invite code surviving a state round trip. If
+// upsertRoom ever drops it, /ping silently mints a second membership again.
+{
+  const s2 = upsertRoom({}, { token: "gm_a", group: "team", name: "me", code: "gk_abc" });
+  assert.equal(roomsOf(s2)[0].code, "gk_abc", "the invite code must be remembered, or re-join dedupe stops working silently");
+  const s3 = upsertRoom(s2, { token: "gm_b", group: "team", name: "me", code: "gk_abc" });
+  assert.equal(roomsOf(s3).length, 1, "a re-join must still collapse to one room locally");
+}
+
 // --- the version we report to the server ----------------------------------
 // It is sent as x-ping-plugin and is the only thing that tells the server an
 // install is stale; a hardcoded copy drifted twice before it was read here.
