@@ -5,7 +5,7 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { getIdentity, encryptFor, decryptFrom } from "@/lib/crypto";
 import type { Profile } from "@/hooks/useProfile";
-import { keepsOutgoingCall, callSlotFree, type CallState } from "@/lib/call";
+import { keepsOutgoingCall, callSlotFree, callAnswered, type CallState } from "@/lib/call";
 import { playRing, startVibrate, notifyIncoming } from "@/lib/ringtone";
 
 export type { CallState } from "@/lib/call";
@@ -292,7 +292,7 @@ export function useCall(profile: Profile | null) {
 
   const hangup = useCallback(() => {
     const p = peerRef.current;
-    if (p && me) signal("end", { from: me });
+    if (p && me) signal("end", { from: me, reason: "hangup" });
     finish();
   }, [me, signal, finish]);
 
@@ -312,8 +312,18 @@ export function useCall(profile: Profile | null) {
       };
       conn.onicecandidate = (e) => {
         const p = peerRef.current;
-        if (e.candidate && p && me) signal("ice", { from: me, cand: seal(e.candidate.toJSON()) });
+        if (!e.candidate) { trace("ice gathering done"); return; }
+        // "host" only means STUN never answered and nothing can leave this LAN;
+        // "srflx" with no connection means both sides need a relay. Without the
+        // type in the log, a stuck call looks the same in either case.
+        if (p && me) {
+          trace(`send ice (${e.candidate.type ?? "?"})`);
+          signal("ice", { from: me, cand: seal(e.candidate.toJSON()) });
+        }
       };
+      // connectionState is a summary and can sit on one value while ICE is
+      // still working; iceConnectionState is what actually moves.
+      conn.oniceconnectionstatechange = () => trace(`ice: ${conn.iceConnectionState}`);
       conn.onconnectionstatechange = () => {
         trace(`peer connection: ${conn.connectionState}`);
         if (conn.connectionState === "connected") {
@@ -418,7 +428,7 @@ export function useCall(profile: Profile | null) {
         CONNECT_MS
       );
     } catch (e) {
-      signal("end", { from: me });
+      signal("end", { from: me, reason: "answer-failed" });
       // One catch covered getUserMedia, the ICE fetch, the SDP exchange and the
       // seal, and blamed the microphone for all of them. Only a media error is
       // actually about the microphone.
@@ -430,7 +440,7 @@ export function useCall(profile: Profile | null) {
 
   const decline = useCallback(() => {
     const p = peerRef.current;
-    if (p && me) signal("end", { from: me });
+    if (p && me) signal("end", { from: me, reason: "declined" });
     finish();
   }, [me, signal, finish]);
 
@@ -448,7 +458,7 @@ export function useCall(profile: Profile | null) {
       const glare = stateRef.current === "calling" && peerRef.current?.id === from;
       if (glare && keepsOutgoingCall(me, from)) return; // they stand down; keep my offer
       if (busy && !glare) {
-        signalOnce(from, "end", { from: me });
+        signalOnce(from, "end", { from: me, reason: "busy" });
         return;
       }
       if (glare) {
@@ -482,6 +492,7 @@ export function useCall(profile: Profile | null) {
       if (!conn || String(payload?.from ?? "") !== peerRef.current?.id) return;
       const sdp = unseal<RTCSessionDescriptionInit>(String(payload?.sdp ?? ""));
       if (!sdp) return;
+      trace("recv answer");
       await conn.setRemoteDescription(sdp).catch(() => {});
       await drain(conn);
     });
@@ -490,6 +501,10 @@ export function useCall(profile: Profile | null) {
       if (String(payload?.from ?? "") !== peerRef.current?.id) return;
       const cand = unseal<RTCIceCandidateInit>(String(payload?.cand ?? ""));
       if (!cand) return;
+      // Receives were never logged, so "their candidates never arrived" and
+      // "they arrived and nothing connected" were indistinguishable — and they
+      // have completely different fixes.
+      trace(`recv ice (${String(cand.candidate ?? "").split(" ")[7] ?? "?"})`);
       const conn = pc.current;
       // Before the remote description lands, addIceCandidate throws — queue it.
       if (conn?.remoteDescription) await conn.addIceCandidate(cand).catch(() => {});
@@ -498,7 +513,21 @@ export function useCall(profile: Profile | null) {
 
     ch.on("broadcast", { event: "end" }, ({ payload }) => {
       if (String(payload?.from ?? "") !== peerRef.current?.id) return;
-      finish(stateRef.current === "calling" ? "Call declined." : undefined);
+      const reason = String(payload?.reason ?? "");
+      trace(`recv end (${reason || "no reason given"})`);
+      // Every one of these used to read "Call declined.", including the ones
+      // that were not a refusal at all. The cause lives on the other person's
+      // machine, so without the reason travelling with the signal there is no
+      // way to tell a decline from a blocked microphone from an auto-reject —
+      // which is exactly the hole this call spent a day in.
+      const said =
+        reason === "declined" ? "Call declined."
+        : reason === "busy" ? "They're already on another call."
+        : reason === "answer-failed" ? "They couldn't answer — their mic or camera was blocked."
+        : reason === "hangup" ? "They hung up."
+        : "Call ended.";
+      // Mid-call, a hang-up needs no banner; before that, say what happened.
+      finish(callAnswered(stateRef.current) && reason === "hangup" ? undefined : said);
     });
 
     ch.subscribe();
