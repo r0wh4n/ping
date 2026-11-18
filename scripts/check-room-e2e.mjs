@@ -146,6 +146,14 @@ console.log("check-room-e2e: all assertions passed (node + browser interop)");
 {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../supabase/functions/group-api/index.ts", import.meta.url), "utf8");
-  assert.match(src, /body: sealed\(title\)/, "the task event must send a sealed title alone, not inside a sentence");
+  // Offered, claimed, state-changed: each invented the same bug separately, so
+  // the rule lives in one helper and all three must go through it.
+  assert.equal((src.match(/\.\.\.taskEvent\(/g) ?? []).length, 3,
+    "every task timeline event must be composed by taskEvent, never by hand");
+  for (const [pattern, what] of [
+    [/body: `claimed:/, "claimed"],
+    [/body: `task "/, "task state change"],
+    [/body: `offered a task: \$/, "offered"],
+  ]) assert.doesNotMatch(src, pattern, `the ${what} event must not paste a title into a sentence itself`);
   assert.match(src, /sealed\(v\) \? "\[encrypted/, "clip() must refuse to slice a sealed value");
 }

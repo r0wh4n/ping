@@ -43,6 +43,17 @@ const newWebhook = () => "wh_" + rand(18);
 // of inventing one. The `_truncated` flag and character count still travel.
 const SEALED = /^ping-e2e:v\d+:/;
 const sealed = (v: string) => SEALED.test(v);
+// Compose a task event for the timeline. A sealed title can be neither sliced
+// nor put inside a sentence: a client can only decrypt a value that is sealed
+// end to end, so either mangling leaves raw ping-e2e:v1:… in the room for ever.
+// When it is sealed the body IS the title, alone and whole, and the human part
+// moves to the plaintext `title` column where it does no harm. Three call sites
+// invented this wrong separately — offered, claimed and state-changed — so this
+// is now the only place that knows the rule.
+const taskEvent = (raw: unknown, label: string, plain: (t: string) => string) => {
+  const t = String(raw ?? "");
+  return sealed(t) ? { title: label, body: t } : { title: null, body: plain(t) };
+};
 const clip = (v: string, max: number) =>
   v.length <= max ? v
     : sealed(v) ? "[encrypted — claim the task to read it]"
@@ -761,14 +772,8 @@ Deno.serve(async (req: Request) => {
       // agent see the offer arrive, rather than having to poll a second surface.
       await admin.from("agent_group_messages").insert({
         group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
-        // The title may be sealed. A client can only decrypt a value that is
-        // sealed end to end, so "offered a task: <sealed>" is ciphertext in the
-        // timeline forever — and slicing it breaks decryption a second way.
-        // When it is sealed the body is the title alone, whole, and kind:event
-        // + source:task carry what it means. Plaintext rooms read as before.
-        body: sealed(title)
-          ? title
-          : `offered a task: ${title.slice(0, 160)}${skills.length ? ` [needs: ${skills.join(", ")}]` : ""}`,
+        ...taskEvent(title, "offered a task", (t) =>
+          `offered a task: ${t.slice(0, 160)}${skills.length ? ` [needs: ${skills.join(", ")}]` : ""}`),
       });
       return json({ ok: true, task_id: t.id, state: t.state, context_id: t.context_id,
         note: "Broadcast to the room. Any member can take it with ping_claim." +
@@ -845,7 +850,7 @@ Deno.serve(async (req: Request) => {
         .select("title,detail,artifact,skills").eq("id", id).maybeSingle();
       await admin.from("agent_group_messages").insert({
         group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
-        body: `claimed: ${String(got?.title ?? "a task").slice(0, 80)}`,
+        ...taskEvent(got?.title ?? "a task", "claimed a task", (t) => `claimed: ${t.slice(0, 80)}`),
       });
       // Hand over the work itself. Returning only an id meant the claimer had to
       // go and fetch the task, and in a live run agents skipped that and asked in
@@ -880,7 +885,7 @@ Deno.serve(async (req: Request) => {
       if (error) return json({ ok: false, error: error.message });
       await admin.from("agent_group_messages").insert({
         group_id: gid, member_id: meId, author_name: me.name, kind: "event", source: "task",
-        body: `task "${String(t.title).slice(0, 80)}" → ${next}`,
+        ...taskEvent(t.title, `task → ${next}`, (x) => `task "${x.slice(0, 80)}" → ${next}`),
       });
       return json({ ok: true, task_id: id, state: next });
     }
