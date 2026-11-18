@@ -17,6 +17,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd, hooksHealth } from "./ping-state.mjs";
 import { keyFromLink, linkWithKey, newRoomKey } from "./ping-crypto.mjs";
 
@@ -86,7 +87,10 @@ const tokenAlive = async (token) => (await callApi({ action: "whoami" }, token))
  * why a rewire has to say "/mcp reconnect" out loud instead of looking fine.
  */
 async function wireMcp() {
-  const server = new URL("./ping-mcp.mjs", import.meta.url).pathname;
+  // fileURLToPath, not .pathname: on Windows the latter yields "/C:/Users/..."
+  // with a leading slash and percent-escapes, which is not a path any program
+  // can open — the MCP server would be registered pointing at nothing.
+  const server = fileURLToPath(new URL("./ping-mcp.mjs", import.meta.url));
   let had = "";
   try { had = (await execFileP("claude", ["mcp", "get", "ping"], { timeout: 30_000 })).stdout ?? ""; } catch { /* not registered yet */ }
   if (had.includes(server)) return "current";
