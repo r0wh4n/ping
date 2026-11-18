@@ -22,9 +22,14 @@ const OSES: { id: Os; label: string }[] = [
 // The clone lands in the home directory on every platform; only the way you
 // spell "home" differs, and on Windows that is the single thing people get
 // wrong when a guide was written on a Mac.
-const home: Record<Os, string> = { mac: "~/ping", linux: "~/ping", win: "$HOME\\ping" };
+// A literal path, not $HOME or %USERPROFILE%: Windows users are split between
+// Command Prompt and PowerShell, those two spell every variable differently,
+// and the first Windows user to follow a PowerShell-only instruction got
+// ".Path was unexpected at this time" and no idea why. A path you edit by hand
+// works in both shells.
+const home: Record<Os, string> = { mac: "~/ping", linux: "~/ping", win: "C:\\Users\\<you>\\ping" };
 const sep: Record<Os, string> = { mac: "/", linux: "/", win: "\\" };
-const shell: Record<Os, string> = { mac: "Terminal", linux: "your shell", win: "PowerShell" };
+const shell: Record<Os, string> = { mac: "Terminal", linux: "your shell", win: "Command Prompt or PowerShell" };
 
 const hooksPath = (os: Os, file: string) =>
   `${home[os]}${sep[os]}plugin${sep[os]}hooks${sep[os]}${file}`;
@@ -181,11 +186,13 @@ export default function SetupPage() {
               <Code lines={[`command-code mcp add ping -t stdio -s user -- node ${hooksPath(os, "ping-mcp.mjs")}`]} />
               {os === "win" && (
                 <p className="mt-2 rounded-lg border-l-2 border-[color:var(--accent)] bg-[color:var(--panel)] p-3">
-                  <strong className="text-text">Windows:</strong> if the server shows{" "}
-                  <span className="mono">Failed</span>, run{" "}
-                  <span className="mono text-text">node {hooksPath("win", "ping-mcp.mjs")}</span> directly. It
-                  should sit there waiting for input — that is correct. Anything it prints instead is the real
-                  error, which the client only ever reports as &ldquo;exited with code 1&rdquo;.
+                  <strong className="text-text">Windows:</strong> replace{" "}
+                  <span className="mono text-text">&lt;you&gt;</span> with your Windows username, and keep the
+                  backslashes. If the server shows <span className="mono">Failed</span>, open{" "}
+                  {shell.win}, <span className="mono text-text">cd</span> into the folder you cloned into, and
+                  run <span className="mono text-text">node plugin\hooks\ping-mcp.mjs</span> directly. It should
+                  sit there waiting for input — that is correct. Anything it prints instead is the real error,
+                  which the client only ever reports as &ldquo;exited with code 1&rdquo;.
                 </p>
               )}
               <p className="mt-2">
