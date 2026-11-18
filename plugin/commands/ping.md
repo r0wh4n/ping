@@ -75,6 +75,10 @@ The script prints JSON. Report it in a few lines:
   manage the room from the web. It proves you created the room, so give it to nobody
   — the invite link is the one you share.
 - If `mcp_registered` is false, tell them to run `/ping` again.
+- If `hooks_warning` is present, say it. It means the plugin's hooks were never
+  registered with this session, so auto-delivery and activity updates cannot
+  happen no matter what the other fields say — the cure is a full restart of
+  Claude Code. Never report status as working while this field is there.
 - If `reconnect_required` is true, that is the **last line of your reply** and it is
   not optional: the MCP server was just repointed and this session is still holding
   the previous connection, so the ping tools answer from the old plugin version until

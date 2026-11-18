@@ -5,7 +5,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
-import { upsertRoom, roomsOf, dropRoom, VERSION } from "./ping-state.mjs";
+import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize } from "./ping-activity.mjs";
 
 // --- @mention -------------------------------------------------------------
@@ -120,6 +120,24 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
   assert.equal(roomsOf(s2)[0].code, "gk_abc", "the invite code must be remembered, or re-join dedupe stops working silently");
   const s3 = upsertRoom(s2, { token: "gm_b", group: "team", name: "me", code: "gk_abc" });
   assert.equal(roomsOf(s3).length, 1, "a re-join must still collapse to one room locally");
+}
+
+// --- noticing that the hooks are dead ---------------------------------------
+// The manifest check above stops the registration being malformed. This stops
+// the OTHER half of the same fifteen days: hooks that are fine but were never
+// registered, because the plugin was installed into a running session. The
+// plugin cannot see its own registration, but it can see that nothing has run.
+{
+  const now = Date.UTC(2026, 10, 18, 12, 0, 0);
+  const at = (minsAgo) => new Date(now - minsAgo * 60_000).toISOString();
+  assert.equal(hooksHealth({ watch: true, live_at: at(0.5) }, now).stale, false, "a hook that ran 30s ago is alive");
+  assert.equal(hooksHealth({ watch: true, live_at: at(60 * 24 * 15) }, now).stale, true, "fifteen days is not a slow tick");
+  assert.equal(hooksHealth({ watch: true }, now).stale, true, "never having run is the fresh-install case and must warn");
+  // watch off stops ping-live before it writes, so a stale stamp proves nothing.
+  assert.equal(hooksHealth({ watch: false }, now).stale, false, "paused delivery must not be reported as a broken hook");
+  assert.equal(hooksHealth({ watch: true, status_at: at(0.5) }, now).stale, false, "either hook running counts");
+  assert.equal(hooksHealth({ watch: true, live_at: at(2) }, now).stale, false, "a couple of idle ticks is not a fault");
+  assert.ok(HOOK_TICK_MS > 0, "the tick the threshold is built from must be real");
 }
 
 // --- the hook manifest ------------------------------------------------------

@@ -17,7 +17,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
+import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd, hooksHealth } from "./ping-state.mjs";
 import { keyFromLink, linkWithKey, newRoomKey } from "./ping-crypto.mjs";
 
 const execFileP = promisify(execFile);
@@ -207,6 +207,9 @@ async function connect(mode, restRaw) {
     reconnect_required: wired === "rewired",
     ...(wired === "rewired" ? { reconnect_note: "The ping MCP server was just pointed at this plugin version, and this session is still holding the old connection. Run /mcp reconnect — or restart Claude Code — before using the ping tools, or they will answer from the previous version." } : {}),
     rooms_watched: roomsOf(readState()).length,
+    ...(hooksHealth(readState()).stale
+      ? { hooks_warning: "Joined, but this session's hooks have not run, so messages will not arrive on their own yet. Fully quit and reopen Claude Code — a fresh install always needs this once." }
+      : {}),
     encrypted: Boolean(key),
     encryption_note: key
       ? "End-to-end encrypted. Everything written here is sealed on this machine first, so the server stores only ciphertext. The key is the part of the invite link after the # — share the whole link, and treat it like a password."
@@ -235,11 +238,17 @@ async function main() {
     const off = arg.trim().toLowerCase() === "off";
     if (!on && !off) die("Usage:  /ping status on   |   /ping status off");
     updateState((s) => ({ ...s, status: on }));
-    const room = readState().active;
+    const after = readState();
+    const room = after.active;
+    const health = hooksHealth(after);
     console.log(JSON.stringify({
       ok: true,
       status: on,
       room: room ?? null,
+      // Reporting "on" for something that cannot happen is what hid a dead
+      // hook for fifteen days. Say when the hooks last ran, every time.
+      hooks_last_ran: health.ran ?? "never",
+      ...(on && health.stale ? { hooks_warning: "Status is recorded, but this session's hooks have not run — so nothing will actually be posted. Activity updates come from a hook Claude Code loads when a session STARTS, so installing or updating the plugin inside a running session leaves them unregistered. Fully quit and reopen Claude Code — not /mcp reconnect, not resume." } : {}),
       note: on
         ? `Auto-updates on. When this agent goes idle it will log what it did — files edited, commands run, commits — to "${room ?? "your active room"}", at most once a minute. Nothing you type and no file contents are sent. Turn off with /ping status off.`
         : "Auto-updates off. Nothing is posted unless you ask for it.",

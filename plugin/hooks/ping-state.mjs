@@ -117,6 +117,30 @@ export function roomMatchesCwd(room, cwd) {
   return here === base || here.startsWith(base + sep);
 }
 
+// ping-live.mjs writes live_at at most once per tick while watching, so a
+// timestamp older than a few ticks means the hook is not running at all.
+export const HOOK_TICK_MS = 60_000;
+
+/**
+ * Are this plugin's hooks actually running?
+ *
+ * Hooks are registered when a Claude Code session STARTS. Install or update the
+ * plugin inside a running session and nothing is registered until it restarts —
+ * and nothing says so. For fifteen days both of Ping's hooks were dead while
+ * `/ping status on` kept answering {"ok": true, "status": true}: the room simply
+ * stayed quiet, and the only available conclusion was that the product did not
+ * work. A security reviewer wrote that conclusion down.
+ *
+ * `watch: false` stops ping-live before it writes, so a stale stamp then means
+ * nothing and must not be reported as a fault.
+ */
+export function hooksHealth(state, now = Date.now()) {
+  const ran = state?.live_at ?? state?.status_at ?? null;
+  if (state?.watch !== true) return { ran, stale: false };
+  const age = ran ? now - Date.parse(ran) : null;
+  return { ran, stale: age === null || age > 5 * HOOK_TICK_MS };
+}
+
 // Forget a room. `ping_leave` voids the token server-side; leaving the entry
 // here meant the watcher kept polling a dead credential and `active` still
 // named a room you had left, so nothing you did was posted anywhere.
