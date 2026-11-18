@@ -5,7 +5,7 @@
 // It does NOT exercise RTCPeerConnection — node has no WebRTC. A real media
 // path needs two browsers; see the manual procedure in the PR notes.
 import assert from "node:assert/strict";
-import { keepsOutgoingCall, callSlotFree } from "../src/lib/call.ts";
+import { keepsOutgoingCall, callSlotFree, callAnswered } from "../src/lib/call.ts";
 import { newKeyPair, encryptFor, decryptFrom, toB64 } from "../src/lib/crypto.ts";
 
 // 1. Glare: exactly one of the two sides keeps its outgoing call, always.
@@ -40,8 +40,21 @@ assert.deepEqual(JSON.parse(plain), sdp, "plaintext fallback parse failed");
 //    renders as "Call declined." Redial immediately and you never escape it.
 assert.equal(callSlotFree("idle"), true, "idle must accept a call");
 assert.equal(callSlotFree("ended"), true, "the post-call flash must not reject the next call — this was the bug");
-for (const busy of ["calling", "ringing", "connected"]) {
+for (const busy of ["calling", "ringing", "connecting", "connected"]) {
   assert.equal(callSlotFree(busy), false, `${busy} is a real call and must stay busy`);
 }
 
-console.log("call signalling: 4/4 checks passed");
+// 5. Answering has to be visible before media flows.
+//    accept() only left "ringing" when the peer connection reached "connected",
+//    so for the seconds in between the screen still said "Incoming call" with
+//    both buttons live and the ringtone going. People pressed the red one to
+//    stop it, which sends `end` — and the caller renders that as
+//    "Call declined." The call died at the hands of the person answering it.
+assert.equal(callAnswered("ringing"), false, "still ringing is not answered");
+assert.equal(callAnswered("connecting"), true, "accept() must put the UI past ringing at once — this was the bug");
+assert.equal(callAnswered("connected"), true, "media flowing is answered");
+for (const no of ["idle", "calling", "ended"]) {
+  assert.equal(callAnswered(no), false, `${no} has not answered anything`);
+}
+
+console.log("call signalling: 5/5 checks passed");

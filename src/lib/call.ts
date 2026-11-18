@@ -6,7 +6,7 @@
  */
 export const keepsOutgoingCall = (myId: string, theirId: string) => myId < theirId;
 
-export type CallState = "idle" | "calling" | "ringing" | "connected" | "ended";
+export type CallState = "idle" | "calling" | "ringing" | "connecting" | "connected" | "ended";
 
 /**
  * Is there room for a new call right now?
@@ -22,3 +22,16 @@ export type CallState = "idle" | "calling" | "ringing" | "connected" | "ended";
  * Lives here rather than in the hook so it can be asserted without a browser.
  */
 export const callSlotFree = (state: CallState) => state === "idle" || state === "ended";
+
+/**
+ * Has this side answered, even if media has not flowed yet?
+ *
+ * Pressing accept used to change nothing on screen: the state only left
+ * "ringing" when the peer connection reached "connected", which is seconds
+ * later and sometimes never. So the header still said "Incoming call", both
+ * buttons were still there, and the ringtone kept going. People reasonably
+ * concluded the button had not worked and pressed the red one — which sends
+ * `end`, and the caller renders that as "Call declined." The call was being
+ * torn down by the person trying to take it.
+ */
+export const callAnswered = (state: CallState) => state === "connecting" || state === "connected";

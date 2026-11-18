@@ -16,6 +16,7 @@ export type CallPeer = { id: string; username: string; pub: string | null };
 // than only inside an open thread.
 const chanFor = (uid: string) => `calls:${uid}`;
 const RING_MS = 35_000;
+const CONNECT_MS = 25_000; // answered, but media never arrived
 const REACH_MS = 10_000; // how long to wait for the signalling channel before giving up
 
 /**
@@ -407,9 +408,23 @@ export function useCall(profile: Profile | null) {
       await conn.setLocalDescription(answer);
       signal("answer", { from: me, sdp: seal(answer) });
       offer.current = null;
-    } catch {
+      // Answered. Say so immediately rather than waiting for media: the ring
+      // timer is about whether anyone picked up, and somebody just did.
+      if (ringTimer.current) clearTimeout(ringTimer.current);
+      setState("connecting");
+      // ...but do not hang in "connecting" for ever if media never arrives.
+      ringTimer.current = setTimeout(
+        () => finish(hasRelay.current ? "Couldn't connect." : "Couldn't connect — this network needs a TURN relay."),
+        CONNECT_MS
+      );
+    } catch (e) {
       signal("end", { from: me });
-      finish("Couldn't access your mic or camera.");
+      // One catch covered getUserMedia, the ICE fetch, the SDP exchange and the
+      // seal, and blamed the microphone for all of them. Only a media error is
+      // actually about the microphone.
+      const media = e instanceof DOMException &&
+        ["NotAllowedError", "NotFoundError", "NotReadableError", "OverconstrainedError", "SecurityError"].includes(e.name);
+      finish(media ? "Couldn't access your mic or camera." : "Couldn't answer the call.");
     }
   }, [me, withVideo, getMedia, makePc, drain, signal, seal, finish, trace]);
 

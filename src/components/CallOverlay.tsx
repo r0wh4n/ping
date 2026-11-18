@@ -100,6 +100,7 @@ export function CallProvider({ profile, children }: { profile: Profile | null; c
   const line =
     state === "calling" ? "Calling…"
     : state === "ringing" ? `Incoming ${withVideo ? "video" : "voice"} call`
+    : state === "connecting" ? "Connecting…"
     : state === "connected" ? mmss(secs)
     : error ?? "Call ended";
 
