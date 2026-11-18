@@ -5,10 +5,10 @@ import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { getIdentity, encryptFor, decryptFrom } from "@/lib/crypto";
 import type { Profile } from "@/hooks/useProfile";
-import { keepsOutgoingCall } from "@/lib/call";
+import { keepsOutgoingCall, callSlotFree, type CallState } from "@/lib/call";
 import { playRing, startVibrate, notifyIncoming } from "@/lib/ringtone";
 
-export type CallState = "idle" | "calling" | "ringing" | "connected" | "ended";
+export type { CallState } from "@/lib/call";
 export type CallPeer = { id: string; username: string; pub: string | null };
 
 // Signalling rides one broadcast channel per user — the same shape the unread
@@ -349,7 +349,7 @@ export function useCall(profile: Profile | null) {
   // ── outgoing ──
   const start = useCallback(
     async (username: string, video = false) => {
-      if (!me || stateRef.current !== "idle") return;
+      if (!me || !callSlotFree(stateRef.current)) return;
       setError(null);
       const { data } = await supabase
         .from("profiles")
@@ -427,7 +427,7 @@ export function useCall(profile: Profile | null) {
     ch.on("broadcast", { event: "offer" }, async ({ payload }) => {
       const from = String(payload?.from ?? "");
       if (!from) return;
-      const busy = stateRef.current !== "idle";
+      const busy = !callSlotFree(stateRef.current);
       // Glare: both dialled at once. Deterministic winner — the higher id gives
       // up its outgoing call and answers instead, so exactly one call survives.
       const glare = stateRef.current === "calling" && peerRef.current?.id === from;
@@ -454,6 +454,10 @@ export function useCall(profile: Profile | null) {
       if (!sdp) return;
       offer.current = sdp;
       setWithVideo(Boolean(payload?.video));
+      // Clear how the LAST call ended. Only start() did this, so an incoming
+      // call rendered the previous "Call declined." / "Missed call." over a
+      // live ringing screen — the call was answerable and looked refused.
+      setError(null);
       setState("ringing");
       ringTimer.current = setTimeout(() => finish("Missed call."), RING_MS);
     });

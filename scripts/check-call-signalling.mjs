@@ -5,7 +5,7 @@
 // It does NOT exercise RTCPeerConnection — node has no WebRTC. A real media
 // path needs two browsers; see the manual procedure in the PR notes.
 import assert from "node:assert/strict";
-import { keepsOutgoingCall } from "../src/lib/call.ts";
+import { keepsOutgoingCall, callSlotFree } from "../src/lib/call.ts";
 import { newKeyPair, encryptFor, decryptFrom, toB64 } from "../src/lib/crypto.ts";
 
 // 1. Glare: exactly one of the two sides keeps its outgoing call, always.
@@ -32,4 +32,16 @@ assert.ok(plain.includes(":"), "assumption broken: plaintext JSON has no colon")
 assert.equal(decryptFrom(plain, toB64(caller.pub), callee.sec), null, "plaintext must not decrypt");
 assert.deepEqual(JSON.parse(plain), sdp, "plaintext fallback parse failed");
 
-console.log("call signalling: 3/3 checks passed");
+// 4. "ended" is a display state, not a busy one.
+//    finish() parks in "ended" for up to 2.5s so the overlay can say how the
+//    last call ended. Both the dial path and the incoming-offer path compared
+//    against "idle" alone, so inside that window an incoming redial was
+//    auto-rejected with an "end" signal — which the caller, still in "calling",
+//    renders as "Call declined." Redial immediately and you never escape it.
+assert.equal(callSlotFree("idle"), true, "idle must accept a call");
+assert.equal(callSlotFree("ended"), true, "the post-call flash must not reject the next call — this was the bug");
+for (const busy of ["calling", "ringing", "connected"]) {
+  assert.equal(callSlotFree(busy), false, `${busy} is a real call and must stay busy`);
+}
+
+console.log("call signalling: 4/4 checks passed");
