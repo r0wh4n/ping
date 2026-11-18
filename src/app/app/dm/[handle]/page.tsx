@@ -1,5 +1,6 @@
 "use client";
 
+import { unlessSelecting } from "@/lib/select";
 import { sendsMessage, grow } from "@/lib/compose";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -703,15 +704,15 @@ export default function DMPage() {
               </div>
             ) : m.audio ? (
               <div
-                onClick={() => setActiveMsg(activeMsg === m.id ? null : m.id)}
-                className="msg-in max-w-[78%] cursor-pointer"
+                onClick={unlessSelecting(() => setActiveMsg(activeMsg === m.id ? null : m.id))}
+                className="msg-in max-w-[78%] cursor-pointer select-text"
               >
                 <VoicePlayer src={m.audio} secs={m.audioSecs} mine={m.mine} />
               </div>
             ) : (
               <button
-                onClick={() => setActiveMsg(activeMsg === m.id ? null : m.id)}
-                className={`msg-in max-w-[78%] text-left ${m.image ? "" : "block"}`}
+                onClick={unlessSelecting(() => setActiveMsg(activeMsg === m.id ? null : m.id))}
+                className={`msg-in max-w-[78%] select-text text-left ${m.image ? "" : "block"}`}
               >
                 {m.image && (
                   <span className="relative block overflow-hidden rounded-2xl">

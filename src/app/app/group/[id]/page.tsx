@@ -1,5 +1,6 @@
 "use client";
 
+import { unlessSelecting } from "@/lib/select";
 import { sendsMessage, grow } from "@/lib/compose";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
@@ -144,8 +145,8 @@ export default function GroupPage() {
               </div>
             ) : (
               <button
-                onClick={() => setActiveMsg(activeMsg === m.id ? null : m.id)}
-                className={`msg-in block max-w-[78%] break-words rounded-2xl px-4 py-2.5 text-left text-[15px] leading-snug ${
+                onClick={unlessSelecting(() => setActiveMsg(activeMsg === m.id ? null : m.id))}
+                className={`msg-in block max-w-[78%] select-text break-words rounded-2xl px-4 py-2.5 text-left text-[15px] leading-snug ${
                   m.mine ? "bg-[color:var(--bubble-out-bg)] text-[color:var(--bubble-out-fg)]" : "border border-border bg-[color:var(--panel)] text-text"
                 }`}
               >
