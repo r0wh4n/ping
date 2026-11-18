@@ -421,6 +421,30 @@ Deno.serve(async (req: Request) => {
       const gate = await rateCheck(admin, joinBucket, RL.join[0]);
       if (gate.over) return rlError("join attempts for this room", gate.retryAfter);
 
+      // One person, one membership. Joining again under a name already in the
+      // room used to mint a second one every time: a live two-person test ended
+      // with six rows for two people, and ping_members -- which is how an agent
+      // decides who to hand work to -- could not tell one person who joined
+      // three times from three people. The plugin now avoids re-joining, but a
+      // client that never loads the plugin (Codex, Cursor, anything speaking raw
+      // MCP) cannot be made to, so the rule has to live here.
+      //
+      // Refused rather than deduped. Returning the existing token would hand
+      // anyone holding the invite link another member's identity, and voiding
+      // the old membership would let them evict that member. A refusal gives
+      // away nothing and takes nothing away.
+      const { data: taken } = await admin.from("agent_group_members")
+        // limit(1), not maybeSingle(): maybeSingle errors when several rows
+        // match, and several rows is precisely the state this guard exists to
+        // stop spreading — it would have failed open on every already-broken room.
+        .select("id").eq("group_id", g.id).eq("name", name).limit(1).maybeSingle();
+      if (taken) {
+        return json({ ok: false, error:
+          `"${name}" is already in this room. If that is your other session, keep using it — a second membership would just split your unread cursor in two. ` +
+          `If you lost that session, call ping_leave from it, or ask the room's owner to run ping_remove_member for "${name}". ` +
+          `If you are someone else, join with a different name.` }, 409);
+      }
+
       const token = newMemberToken();
       // Start the read cursor at the moment of joining. Left at its epoch
       // default, the first ping_wait treated this member as "needs catching up"
@@ -434,10 +458,9 @@ Deno.serve(async (req: Request) => {
         .select("id,role").single();
       if (error) return json({ ok: false, error: error.message });
       await rateSpend(admin, joinBucket, RL.join); // charge only a join that happened
-      // A retry that already succeeded leaves two memberships under one name —
-      // seen in a live run. Deliberately NOT deduped by returning the existing
-      // token: that would hand anyone with the invite link another agent's
-      // identity. Flagged instead, so the caller can leave the spare.
+      // Kept as a belt-and-braces count: the guard above should make this
+      // impossible, and if it ever reports a duplicate again the guard is the
+      // thing that broke.
       const { count: sameName } = await admin.from("agent_group_members")
         .select("id", { count: "exact", head: true }).eq("group_id", g.id).eq("name", name);
       const dupe = (sameName ?? 0) > 1;
@@ -643,6 +666,28 @@ Deno.serve(async (req: Request) => {
     // peer groups with no admin role, and inventing one here would be a bigger
     // change than the feature. Revoking stops NEW joins; it does not void the
     // tokens of members already in the room.
+    if (action === "remove_member") {
+      // The escape hatch for the join guard. A session that died still holds
+      // its name, and until now the only cure was deleting the row by hand in
+      // SQL — which is exactly what had to be done to this room today.
+      const who = cleanName(body.name);
+      if (!who) return json({ ok: false, error: "Which member? Pass `name` exactly as ping_members shows it." });
+      const { data: gRow } = await admin.from("agent_groups").select("owner_user").eq("id", gid).maybeSingle();
+      if (!gRow) return json({ ok: false, error: "Group not found." });
+      if (gRow.owner_user)
+        return json({ ok: false, error: "This room has an account owner. Ask them to remove the member from Mission Control." }, 403);
+      const { data: founder } = await admin.from("agent_group_members")
+        .select("id").eq("group_id", gid).order("joined_at", { ascending: true }).limit(1).maybeSingle();
+      if (!founder || String(founder.id) !== meId)
+        return json({ ok: false, error: "Only the member who created this room can remove members." }, 403);
+      const { data: gone, error: rmErr } = await admin.from("agent_group_members")
+        .delete().eq("group_id", gid).eq("name", who).neq("id", meId).select("id,name");
+      if (rmErr) return json({ ok: false, error: rmErr.message });
+      if (!gone?.length) return json({ ok: false, error: `No member called "${who}" to remove. Check ping_members — and you cannot remove yourself; use ping_leave.` });
+      return json({ ok: true, removed: gone.length, name: who,
+        note: `Removed ${gone.length} membership${gone.length === 1 ? "" : "s"} called "${who}". Their token no longer works; the messages they already sent stay in the room. "${who}" is free to join again.` });
+    }
+
     if (action === "invite") {
       const op = String(body.op ?? "status");
       // Reading the link's state is fine for anyone in the room — you already

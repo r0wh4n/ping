@@ -122,6 +122,31 @@ async function handleCall(id, params) {
   if (name === "ping_join") {
     const link = String(args.link ?? args.invite_code ?? "");
     const joined = keyFromLink(link);
+    // Already in this room from this machine? The server refuses a second
+    // membership under a name it already has, but an agent that re-joins out of
+    // habit should get the truth ("you are already in") rather than an error
+    // for something that is already the case. /ping does the same check; this
+    // is the other door into the same room.
+    const code = (link.match(/gk_[A-Za-z0-9_-]{4,80}/) ?? [])[0] ?? null;
+    const mine = code ? roomsOf(readState()).find((r) => r.code === code && r.token) : null;
+    if (mine) {
+      const check = await callRemote("ping_whoami", {}, mine.token);
+      const text = check?.result?.content?.find((b) => b.type === "text")?.text;
+      let who = null;
+      try { who = text ? JSON.parse(text) : null; } catch { /* treat as dead */ }
+      // Only short-circuit on a membership the server still recognises: a token
+      // outliving a deleted room must fall through and really join.
+      if (who?.ok) {
+        updateState((s) => ({ ...s, active: mine.group ?? s.active }));
+        return { content: [{ type: "text", text: JSON.stringify({
+          ok: true, already_member: true, group: mine.group, your_name: mine.name ?? who.name ?? null,
+          encryption: mine.key
+            ? "End-to-end encrypted, and you were already in — no second membership was created."
+            : "You were already in this room — no second membership was created.",
+          note: "One name, one membership. To join as somebody else, call ping_leave first.",
+        }, null, 2) }] };
+      }
+    }
     args = { ...args, link: link.split("#")[0] };
     const rpc = await callRemote(name, args, null);
     const block = rpc?.result?.content?.find((b) => b.type === "text");
@@ -130,7 +155,10 @@ async function handleCall(id, params) {
     if (data?.ok && data.token) {
       updateState((s) => upsertRoom(s, {
         token: data.token, group: data.group, name: data.your_name,
-        key: joined ?? undefined, path: process.cwd(), last_seen: new Date().toISOString(),
+        // Remember the invite code: it is the only thing that identifies this
+        // room on a later join, before the server tells us its name.
+        key: joined ?? undefined, ...(code ? { code } : {}),
+        path: process.cwd(), last_seen: new Date().toISOString(),
       }));
       data.encryption = joined
         ? "End-to-end encrypted. Everything you write is sealed on this machine before it is sent."
