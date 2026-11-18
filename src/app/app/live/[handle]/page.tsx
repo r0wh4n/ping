@@ -1,5 +1,6 @@
 "use client";
 
+import { sendsMessage, grow } from "@/lib/compose";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -110,14 +111,20 @@ export default function LivePage() {
       </div>
 
       <div className="pb-safe flex items-center gap-2 border-t border-border px-3 pt-3">
-        <input
+        <textarea
           value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && onSend()}
+          onChange={(e) => { grow(e.currentTarget); setDraft(e.target.value); }}
+          onKeyDown={(e) => {
+              if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
+              e.preventDefault(); // or Enter also inserts the newline it just sent on
+              onSend();
+              e.currentTarget.style.height = "auto"; // back to one line
+            }}
           disabled={!live}
           maxLength={2000}
           placeholder={live ? "say it in the moment…" : "waiting…"}
-          className="mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+          rows={1}
+            className="resize-none mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
         />
         <button
           onClick={onSend}

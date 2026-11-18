@@ -1,5 +1,6 @@
 "use client";
 
+import { sendsMessage, grow } from "@/lib/compose";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
@@ -248,17 +249,24 @@ export default function GroupPage() {
             <line x1="18" y1="20" x2="18" y2="14" />
           </svg>
         </button>
-        <input
+        <textarea
           value={draft}
           onChange={(e) => {
+              grow(e.currentTarget);
             setDraft(e.target.value);
             setTyping(true);
           }}
-          onKeyDown={(e) => e.key === "Enter" && onSend()}
+          onKeyDown={(e) => {
+              if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
+              e.preventDefault(); // or Enter also inserts the newline it just sent on
+              onSend();
+              e.currentTarget.style.height = "auto"; // back to one line
+            }}
           disabled={status !== "ready"}
           maxLength={2000}
           placeholder={status === "ready" ? `Message ${name}…` : "…"}
-          className="mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+          rows={1}
+            className="resize-none mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
         />
         <button
           onClick={onSend}

@@ -1,5 +1,6 @@
 "use client";
 
+import { sendsMessage, grow } from "@/lib/compose";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type MouseEvent } from "react";
@@ -331,7 +332,7 @@ export default function DMPage() {
   // Cmd/Ctrl-V in the message field. A screenshot arrives as a File on the
   // clipboard, so it takes the same road as a picked one; a text paste has no
   // files and is left to the input.
-  const onPasteMedia = (e: ClipboardEvent<HTMLInputElement>) => {
+  const onPasteMedia = (e: ClipboardEvent<HTMLTextAreaElement>) => {
     const file = e.clipboardData?.files?.[0];
     if (!file || uploading) return;
     e.preventDefault();
@@ -939,20 +940,27 @@ export default function DMPage() {
           >
             <ClockIcon />
           </button>
-          <input
+          <textarea
             value={draft}
             onChange={(e) => {
+              grow(e.currentTarget);
               setDraft(e.target.value);
               setTyping(true);
             }}
             onFocus={() => setInputFocused(true)}
             onBlur={() => setInputFocused(false)}
-            onKeyDown={(e) => e.key === "Enter" && onSend()}
+            onKeyDown={(e) => {
+              if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
+              e.preventDefault(); // or Enter also inserts the newline it just sent on
+              onSend();
+              e.currentTarget.style.height = "auto"; // back to one line
+            }}
             onPaste={onPasteMedia}
             disabled={status !== "ready"}
             maxLength={2000}
             placeholder={status === "ready" ? "Message @" + handle + "…" : "…"}
-            className="mono min-h-[52px] min-w-0 flex-1 rounded-3xl border border-border bg-[color:var(--panel)] px-5 py-4 text-base outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+            rows={1}
+            className="resize-none mono min-h-[52px] min-w-0 flex-1 rounded-3xl border border-border bg-[color:var(--panel)] px-5 py-4 text-base outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
           />
           {/* Camera + voice collapse once the field is focused, leaving just
               schedule + send. Blur (tap elsewhere) brings them back. */}
