@@ -113,7 +113,15 @@ async function autoLog(room, key) {
   // would replay every commit in the repo's history into the room.
   if (!room.logged_at) return stamp();
 
+  // Claim the window BEFORE looking at anything. One machine can be running
+  // several of these at once — a client per project, plus anything started by
+  // hand — and they share one state file. Reading the cursor, then working,
+  // then writing it back let every instance find the same unreported commits
+  // and post them all: a live room took the same three commits twice in
+  // fourteen seconds. Stamping first makes the second instance fail its own
+  // rate limit and say nothing.
   const since = room.logged_at;
+  stamp();
   const log = await git(dir, ["log", `--since=${since}`, "--no-merges", "-n", "5", "--format=%x01%cI%x00%s", "--name-only"]);
   const commits = log === null ? [] : parseCommitLog(log).reverse(); // oldest first, as they happened
   let lines = commits.map((c) => describeCommit(c.subject, c.files));
@@ -127,15 +135,14 @@ async function autoLog(room, key) {
     // for an hour is the noise this whole change exists to remove.
     if (line && line !== room.logged_text) lines = [line];
   }
-  if (!lines.length) return stamp();
+  if (!lines.length) return;
 
   for (const text of lines) {
     await callRemote("ping_log", sealArgs("ping_log", { text }, key), room.token).catch(() => null);
   }
   updateState((st) => ({
     ...st,
-    rooms: (st.rooms ?? []).map((r) =>
-      r.token === room.token ? { ...r, logged_at: new Date().toISOString(), logged_text: lines[lines.length - 1] } : r),
+    rooms: (st.rooms ?? []).map((r) => (r.token === room.token ? { ...r, logged_text: lines[lines.length - 1] } : r)),
   }));
 }
 
