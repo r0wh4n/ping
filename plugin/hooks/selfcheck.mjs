@@ -162,6 +162,10 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
   assert.equal(describeWork(["src/app/page.tsx"]), "working on the frontend", "a dirty tree is work in flight");
   assert.equal(describeWork([]), null, "a clean tree says nothing");
   assert.equal(describeWork(["plugin/hooks/ping-mcp.mjs"]), "working on tooling", "the plugin's own files classify");
+  // The case this was built for: an agent asked for a calculator writes a few
+  // files somewhere with no repo at all, and the room heard nothing.
+  assert.equal(describeWork(["C:/Users/Administrator/Desktop/calc/index.html", "C:/Users/Administrator/Desktop/calc/style.css"]),
+    "working on the frontend", "plain files outside a repo still say something");
 }
 
 // --- where an automatic status post goes ----------------------------------

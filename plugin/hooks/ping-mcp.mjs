@@ -14,6 +14,8 @@
 //   claude mcp add --transport stdio ping -- node <this file>
 import { createInterface } from "node:readline";
 import { execFile } from "node:child_process";
+import { readdir, stat } from "node:fs/promises";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import { readState, updateState, roomsOf, roomMatchesCwd, upsertRoom, dropRoom, VERSION } from "./ping-state.mjs";
 import { keyFrom, keyFromLink, linkWithKey, newRoomKey, openDeep, sealArgs } from "./ping-crypto.mjs";
@@ -44,6 +46,36 @@ const git = async (dir, args) => {
   }
 };
 
+const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "venv", "__pycache__", "target"]);
+
+/**
+ * Files touched since `sinceMs`, two levels deep, capped.
+ *
+ * git is the better signal, but plenty of real work has no repo behind it —
+ * someone asks an agent for a calculator on the Desktop and it writes three
+ * files. Watching only git meant that work existed nowhere in the room.
+ * Names are read to classify and never sent.
+ */
+async function recentFiles(dir, sinceMs, depth = 2, budget = { n: 400 }) {
+  const out = [];
+  let entries;
+  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return out; }
+  for (const e of entries) {
+    if (budget.n-- <= 0) break;
+    if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+    const full = join(dir, e.name);
+    if (e.isDirectory()) {
+      if (depth > 0) out.push(...(await recentFiles(full, sinceMs, depth - 1, budget)));
+      continue;
+    }
+    try {
+      const st = await stat(full);
+      if (st.mtimeMs > sinceMs) out.push(full);
+    } catch { /* vanished between readdir and stat */ }
+  }
+  return out;
+}
+
 /**
  * Post what this agent has been doing, without any help from it.
  *
@@ -61,7 +93,13 @@ const git = async (dir, args) => {
  * throughout — this must never be the reason a tool call fails.
  */
 async function autoLog(room, key) {
-  if (!room?.path || !room.token) return;
+  if (!room?.token) return;
+  // The directory the CLIENT is running in, not the one the room was joined
+  // in. Someone joins once in ~/ping and then builds a calculator on the
+  // Desktop; watching the join directory means watching a repo they left, and
+  // the room hears nothing about the thing they actually made. activeRoom()
+  // has already decided this room belongs to this cwd.
+  const dir = process.cwd();
   const now = Date.now();
   const last = room.logged_at ? Date.parse(room.logged_at) : 0;
   if (now - last < LOG_EVERY_MS) return;
@@ -76,14 +114,14 @@ async function autoLog(room, key) {
   if (!room.logged_at) return stamp();
 
   const since = room.logged_at;
-  const log = await git(room.path, ["log", `--since=${since}`, "--no-merges", "-n", "5", "--format=%x01%cI%x00%s", "--name-only"]);
-  if (log === null) return stamp(); // not a git repo; nothing universal to read
-
-  const commits = parseCommitLog(log).reverse(); // oldest first, as they happened
+  const log = await git(dir, ["log", `--since=${since}`, "--no-merges", "-n", "5", "--format=%x01%cI%x00%s", "--name-only"]);
+  const commits = log === null ? [] : parseCommitLog(log).reverse(); // oldest first, as they happened
   let lines = commits.map((c) => describeCommit(c.subject, c.files));
 
   if (!lines.length) {
-    const dirty = parseStatus(await git(room.path, ["status", "--porcelain"]));
+    const dirty = log === null
+      ? await recentFiles(dir, Date.parse(since))   // no repo: fall back to mtimes
+      : parseStatus(await git(dir, ["status", "--porcelain"]));
     const line = describeWork(dirty);
     // Only when it says something new — "working on the backend" every minute
     // for an hour is the noise this whole change exists to remove.
