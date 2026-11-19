@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
-import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus } from "./ping-activity.mjs";
+import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus, taskFrom } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
 import { newRoomKey, keyFrom, seal, openDeep } from "./ping-crypto.mjs";
 
@@ -158,6 +158,35 @@ assert.match(summarize([entry("2026-11-03T13:00:00Z", [bash("npm test")])], "").
 assert.equal(summarize(lines, "2026-11-03T10:05:00Z"), null, "nothing new since the cursor -> no post");
 assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name: "Read", input: { file_path: "/x/a.ts" } }])], ""), null,
   "reading a file is not doing something");
+
+// --- the task, in the person's own words ----------------------------------
+// Effects cannot say what work was FOR: "working on the frontend" was true of
+// building a game and of deleting one, and a room full of it told nobody
+// anything. This is the only place something a person typed leaves the
+// machine, so what it does and does not take matters.
+{
+  const user = (content) => ({ type: "user", timestamp: "2026-11-03T09:00:00Z", message: { content } });
+  assert.equal(taskFrom(user("delete the snakegame and tell me about top 5 security news")),
+    "delete the snakegame and tell me about top 5 security news", "a plain request is the task");
+  assert.equal(taskFrom(user([{ type: "text", text: "add a dark mode toggle" }])), "add a dark mode toggle",
+    "content blocks too");
+  assert.equal(taskFrom(user([{ type: "tool_result", content: "ok" }])), null,
+    "a tool result is machine output, not a request");
+  assert.equal(taskFrom(user("/ping status on")), null, "a slash command is not a task");
+  assert.equal(taskFrom(user("  ")), null, "nothing typed, nothing to say");
+  assert.equal(taskFrom(user("<system-reminder>be nice</system-reminder> fix the login bug")), "fix the login bug",
+    "injected blocks are stripped, not reported");
+  // One sentence only: the room gets the request, never the whole message.
+  assert.equal(taskFrom(user("fix the login bug. it has been broken since Tuesday and nobody noticed")),
+    "fix the login bug.", "only the first sentence");
+  const whole = ("please " + "refactor the authentication layer ".repeat(6)).replace(/\s+/g, " ").trim();
+  const long = taskFrom(user(whole));
+  assert.ok(long.length <= 111, "capped");
+  assert.match(long, /…$/, "and marked as trimmed");
+  const kept = long.slice(0, -1);
+  assert.ok(whole.startsWith(kept), "what it keeps is the start of what was typed, unaltered");
+  assert.equal(whole[kept.length], " ", "and it stops at a space — never mid-word");
+}
 
 // --- what the proxy posts for a client with no hooks ----------------------
 // Cursor, Codex and Command Code have no hook system, so nothing they did ever

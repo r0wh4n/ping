@@ -163,6 +163,41 @@ export function parseCommitLog(stdout) {
     .filter((c) => c.at && c.subject);
 }
 
+// What the person actually asked for, in their own words.
+//
+// Everything else here reads effects — files, commits — and effects cannot say
+// what the work was FOR. "working on the frontend" was true of building a game
+// and of deleting one; a room full of it told nobody anything. The task is the
+// one thing that answers "what are they doing", and it is sitting in the
+// transcript as the prompt.
+//
+// This is the only place anything a person typed leaves the machine. It is the
+// request line, trimmed to one sentence — never the conversation, never a
+// reply, never a file or its contents.
+const TASK_MAX = 110;
+
+export function taskFrom(entry) {
+  const c = entry?.message?.content;
+  // A tool result is also a "user" entry. It is machine output, not a request.
+  if (Array.isArray(c) && c.some((p) => p?.type === "tool_result")) return null;
+  const raw = typeof c === "string"
+    ? c
+    : Array.isArray(c) ? c.filter((p) => p?.type === "text").map((p) => p.text).join(" ") : "";
+  const text = String(raw)
+    .replace(/<[^>]*>[\s\S]*?<\/[^>]*>/g, " ")  // pasted blocks, reminders, command wrappers
+    .replace(/<[^>]*>/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text || text.startsWith("/")) return null;   // a slash command is not a task
+  const first = text.split(/(?<=[.!?])\s/)[0].trim();
+  if (first.length <= TASK_MAX) return first;
+  // Cut on a word boundary. Slicing at the character left "…which it give…",
+  // which reads like a transcription error rather than a trimmed sentence.
+  const cut = first.slice(0, TASK_MAX);
+  const lastSpace = cut.lastIndexOf(" ");
+  return (lastSpace > TASK_MAX / 2 ? cut.slice(0, lastSpace) : cut).trimEnd() + "…";
+}
+
 /**
  * @param lines raw transcript lines (JSONL, newest last)
  * @param since ISO timestamp already reported; only later entries count
@@ -174,6 +209,7 @@ export function summarize(lines, since) {
   const commits = [];
   let until = since || "";
   let project = "";
+  let task = null;
 
   for (const line of lines) {
     let o;
@@ -185,8 +221,14 @@ export function summarize(lines, since) {
     // Only `assistant` entries: the same content is mirrored into
     // api-request-blob entries that carry no timestamp, and counting both
     // doubles everything.
-    if (o?.type !== "assistant" || !o.timestamp) continue;
+    if (!o?.timestamp) continue;
     if (since && o.timestamp <= since) continue;
+    if (o.type === "user") {
+      const asked = taskFrom(o);
+      if (asked) { task = asked; if (o.timestamp > until) until = o.timestamp; }
+      continue;
+    }
+    if (o.type !== "assistant") continue;
     if (o.timestamp > until) until = o.timestamp;
     if (o.cwd) project = basename(o.cwd);
 
@@ -214,10 +256,13 @@ export function summarize(lines, since) {
     body = `working on ${where ?? "it"}`;
   } else if (acts.size) {
     body = [...acts].join(" and ");
-  } else {
+  } else if (!task) {
     return null;
   }
 
-  const text = [project, body].filter(Boolean).join(" · ");
+  // The task leads, because it is the answer to "what are they doing". The
+  // effects follow as evidence. A task on its own still reports: research,
+  // reading and answering leave nothing behind, and silence read as idle.
+  const text = [project, task && `“${task}”`, body].filter(Boolean).join(" · ");
   return { text: text.length > MAX_LEN ? text.slice(0, MAX_LEN - 1) + "…" : text, until };
 }
