@@ -18,6 +18,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd, hooksHealth } from "./ping-state.mjs";
 import { keyFromLink, linkWithKey, newRoomKey } from "./ping-crypto.mjs";
 
@@ -114,16 +115,24 @@ async function wireMcp() {
 // `/ping join <link> --name "Rohan" --role backend`. The command asks the
 // person for both, because the agent is where they already are — a web form
 // they never opened can't. git config is the fallback for an unattended run.
-function takeFlags(rest) {
+export function takeFlags(rest) {
   const flags = {};
   const words = [];
   const parts = String(rest || "").match(/"[^"]*"|\S+/g) ?? [];
+  // A flag takes every word up to the next flag. Quoting a two-word name is
+  // the obvious way to write it and works everywhere except the place it is
+  // most needed: Windows PowerShell strips embedded double quotes when it
+  // calls a native binary, so `--name "rohan ec2"` arrived here as two bare
+  // words. The old parser took the first and spilled the second into the
+  // invite link — joining under a silently wrong name, with nothing to show
+  // for it but a member list that disagreed with what was typed.
+  const ends = (w) => /^--/.test(w) || /^(https?:\/\/|gk_)/.test(w);
   for (let i = 0; i < parts.length; i++) {
-    const p = parts[i];
-    const m = p.match(/^--(name|role)$/);
-    if (m && parts[i + 1]) {
-      flags[m[1]] = parts[++i].replace(/^"|"$/g, "");
-    } else words.push(p);
+    const m = parts[i].match(/^--(name|role)$/);
+    if (!m || !parts[i + 1] || ends(parts[i + 1])) { words.push(parts[i]); continue; }
+    const taken = [];
+    while (i + 1 < parts.length && !ends(parts[i + 1])) taken.push(parts[++i]);
+    flags[m[1]] = taken.join(" ").replace(/^"|"$/g, "");
   }
   return { flags, rest: words.join(" ") };
 }
@@ -321,4 +330,9 @@ async function main() {
   die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping rooms   ·   /ping here   ·   /ping anywhere   ·   /ping claim   ·   /ping off');
 }
 
-main().catch((e) => die("Ping: " + String(e?.message || e)));
+// Only when run as a command. Without this, importing anything from here —
+// the selfcheck does, to test the flag parser — runs the CLI, prints a usage
+// line and exits 1.
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((e) => die("Ping: " + String(e?.message || e)));
+}

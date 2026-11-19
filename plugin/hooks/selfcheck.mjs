@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize } from "./ping-activity.mjs";
+import { takeFlags } from "./ping-connect.mjs";
 
 // --- @mention -------------------------------------------------------------
 assert.equal(mentionsMe("hey @rohan can you look", "rohan"), true, "plain mention");
@@ -17,6 +18,21 @@ assert.equal(mentionsMe("@Rohan please review", "Rohan Pandey"), true, "first wo
 assert.equal(mentionsMe("@Rohan Pandey please", "Rohan Pandey"), true, "full multi-word name");
 assert.equal(mentionsMe("nothing here", "rohan"), false, "no mention");
 assert.equal(mentionsMe("@rohan", undefined), false, "no name configured");
+
+// --- join flags ------------------------------------------------------------
+// Windows PowerShell strips embedded double quotes when it calls a native
+// binary, so a quoted two-word name arrives as two bare words. Taking only the
+// first of them joined a live room under a silently wrong name and spilled the
+// rest into the invite link.
+{
+  const link = "https://theping.chat/g/gk_x#k=K";
+  assert.equal(takeFlags(`${link} --name "rohan ec2" --role backend`).flags.name, "rohan ec2", "quoted name");
+  assert.equal(takeFlags(`${link} --name rohan ec2 --role backend`).flags.name, "rohan ec2", "unquoted, as PowerShell delivers it");
+  assert.equal(takeFlags(`${link} --name rohan ec2 --role backend`).rest, link, "the link survives intact");
+  assert.equal(takeFlags(`${link} --name rohan ec2 --role backend`).flags.role, "backend", "the next flag still ends the previous one");
+  assert.equal(takeFlags(`--name rohan ec2 ${link}`).rest, link, "a link after the flag is not swallowed by it");
+  assert.equal(takeFlags(`${link} --name --role backend`).flags.name, undefined, "a flag is not a value");
+}
 
 // --- room dedupe ----------------------------------------------------------
 let s = {};
