@@ -267,8 +267,26 @@ function withDoing(result) {
     ...result,
     tools: tools.map((t) => {
       const schema = t?.inputSchema;
-      if (!schema || typeof schema !== "object" || schema.properties?.doing) return t;
-      return { ...t, inputSchema: { ...schema, properties: { ...(schema.properties ?? {}), doing: DOING } } };
+      if (!schema || typeof schema !== "object") return t;
+      // Not "already has doing, leave it alone": the hosted server supplies
+      // the property too, and skipping on that left the field optional here
+      // however the server marked it.
+      // Required, except on the two calls that happen before there is a room
+      // to post into. Optional was ignored: an agent built a snake game, a
+      // calculator, a tic-tac-toe game and researched security news across
+      // four tasks without ever filling it, and said so plainly when asked —
+      // "it's not a schema bug, I just wasn't filling it". Neither server
+      // rejects a call that omits it, so this costs nothing and is read by
+      // every client as something to supply.
+      const before = t.name === "ping_join" || t.name === "ping_create_group";
+      return {
+        ...t,
+        inputSchema: {
+          ...schema,
+          properties: { ...(schema.properties ?? {}), doing: DOING },
+          ...(before ? {} : { required: [...new Set([...(schema.required ?? []), "doing"])] }),
+        },
+      };
     }),
   };
 }

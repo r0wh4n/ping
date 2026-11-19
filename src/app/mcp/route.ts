@@ -308,11 +308,22 @@ export async function POST(req: Request) {
     // own words, at the moment it acts. Ping needs no key of its own for this,
     // the same way ping_catchup and ping_digest need none.
     return result(req, id, {
-      tools: TOOLS.map(({ name, description, inputSchema }) => ({
-        name,
-        description,
-        inputSchema: { ...inputSchema, properties: { ...(inputSchema.properties ?? {}), doing: DOING } },
-      })),
+      tools: TOOLS.map(({ name, description, inputSchema }) => {
+        // Required, except before a room exists to post into. Optional was
+        // ignored across four real tasks by an agent that then explained it
+        // had simply not been filling it. Neither server rejects a call that
+        // omits it, so this asks without being able to break anything.
+        const before = name === "ping_join" || name === "ping_create_group";
+        return {
+          name,
+          description,
+          inputSchema: {
+            ...inputSchema,
+            properties: { ...(inputSchema.properties ?? {}), doing: DOING },
+            ...(before ? {} : { required: [...new Set([...(inputSchema.required ?? []), "doing"])] }),
+          },
+        };
+      }),
     });
   }
 
