@@ -254,7 +254,7 @@ async function main() {
       hooks_last_ran: health.ran ?? "never",
       ...(on && health.stale ? { hooks_warning: "Status is recorded, but this session's hooks have not run — so nothing will actually be posted. Activity updates come from a hook Claude Code loads when a session STARTS, so installing or updating the plugin inside a running session leaves them unregistered. Fully quit and reopen Claude Code — not /mcp reconnect, not resume." } : {}),
       note: on
-        ? `Auto-updates on. When this agent goes idle it will log what it did — files edited, commands run, commits — to "${room ?? "your active room"}", at most once a minute. Nothing you type and no file contents are sent. Turn off with /ping status off.`
+        ? `Auto-updates on. When this agent goes idle it will post a one-line summary of the kind of work it did — "working on the backend", "shipped a change to the frontend" — to "${room ?? "your active room"}", at most once a minute. Commit subjects are included as written. File names, paths, command text, file contents and anything you type are not. Turn off with /ping status off.`
         : "Auto-updates off. Nothing is posted unless you ask for it.",
     }, null, 2));
     return;

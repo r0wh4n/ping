@@ -2,21 +2,63 @@
 //
 // Claude Code already writes every tool call to the session transcript, so a
 // status update needs no model call and no extra turn — it is a read of a file
-// that exists anyway. This turns the tail of that transcript into one line:
+// that exists anyway. This turns the tail of that transcript into one line a
+// teammate can read without caring how you work:
 //
-//   ping · edited ConnectAI.tsx, page.tsx · ran npm run build, git push
-//         · committed "Show the join command in the room UI"
+//   ping · shipped a change to the frontend — "Show the join command in the room UI"
+//   secure-share · working on the backend
+//   youtube · running tests
 //
-// Deliberately narrow about what leaves the machine. File BASENAMES, not paths
-// — a path leaks your directory layout and often a client's name. The head of a
-// command, not its arguments. Commit subjects, which are written to be read.
-// Never file contents, never tool output, never what you typed. Reads and
-// searches are skipped entirely: looking at a file is not doing something.
+// It used to post the raw material instead — `edited useDM.ts, page.tsx · ran
+// npm run build, git push`. Over a day that was 134 lines of somebody else's
+// shell history: noise to read, and a far more detailed picture of how a
+// person works than anyone agreed to share. The room wants to know who is on
+// what, not which commands they typed.
+//
+// Deliberately narrow about what leaves the machine. Paths are read here to
+// classify the work and are NEVER sent — only the label is. Command text is
+// read to recognise a test run or a build and is never sent either. Commit
+// subjects are sent as written, because they are prose authored to be read by
+// other people. Never file contents, never tool output, never what you typed.
+// Reads and searches are skipped entirely: looking at a file is not doing
+// something.
 
 import { basename } from "node:path";
 
 const EDITORS = new Set(["Edit", "Write", "NotebookEdit", "MultiEdit"]);
 const MAX_LEN = 300;
+
+// Which part of the product was touched. Matched against the full path, which
+// stays on this machine; only the label travels. First match wins, so a
+// .test.tsx counts as tests rather than frontend.
+//
+// ponytail: a path heuristic, not comprehension — it can say "the frontend"
+// when the real answer is "a bug in the invite flow". The commit subject
+// carries that meaning when there is one. Swap in an LLM summary here if the
+// labels ever prove too coarse to be worth reading.
+const AREAS = [
+  [/(^|\/)(__tests__|tests?|spec)\//i, "tests"],
+  [/\.(test|spec)\.[a-z]+$/i, "tests"],
+  [/\.(md|mdx|txt|rst)$/i, "docs"],
+  [/(^|\/)(\.github|infra|terraform|deploy|docker)\//i, "infra"],
+  [/(Dockerfile|\.ya?ml)$/i, "infra"],
+  [/\.sql$/i, "the database"],
+  [/(^|\/)(supabase|server|api|backend|db|functions|routes)\//i, "the backend"],
+  [/\.(tsx|jsx|css|scss|html|vue|svelte)$/i, "the frontend"],
+  [/(^|\/)(components?|pages?|app|ui|styles?|public|src)\//i, "the frontend"],
+  [/(^|\/)(scripts?|bin|tools?)\//i, "tooling"],
+];
+const areaOf = (path) => AREAS.find(([re]) => re.test(path))?.[1] ?? null;
+
+// A session that only ran commands still did something worth a line — but only
+// when the command says what. Anything else stays quiet rather than posting
+// "ran ls, cd", which is what made the old log unreadable.
+const ACTS = [
+  [/^(npm (run )?test|yarn test|pnpm test|vitest|jest|pytest|go test|cargo test)/i, "running tests"],
+  [/^(npm run build|next build|tsc|cargo build|go build|make)/i, "building"],
+  [/^(git push|vercel|supabase|docker|kubectl|fly|wrangler)/i, "deploying"],
+];
+const actOf = (cmd) => ACTS.find(([re]) => re.test(cmd))?.[1] ?? null;
 
 // `git commit -F -` with a heredoc is as common here as `-m`, so try both and
 // fall back to saying nothing rather than guessing wrong.
@@ -34,8 +76,8 @@ const commandHead = (cmd) => {
   return words.slice(0, words[0] === "npm" || words[0] === "git" || words[0] === "npx" ? 3 : 1).join(" ");
 };
 
-const list = (items, cap) =>
-  items.length <= cap ? items.join(", ") : `${items.slice(0, cap).join(", ")} +${items.length - cap} more`;
+/** "the frontend" · "the frontend and tests" · null when nothing classified. */
+const phrase = (areas) => (areas.length ? areas.slice(0, 2).join(" and ") : null);
 
 /**
  * @param lines raw transcript lines (JSONL, newest last)
@@ -43,8 +85,8 @@ const list = (items, cap) =>
  * @returns {{text: string, until: string} | null} null when nothing happened
  */
 export function summarize(lines, since) {
-  const files = new Set();
-  const commands = new Set();
+  const paths = new Set();
+  const acts = new Set();
   const commits = [];
   let until = since || "";
   let project = "";
@@ -68,23 +110,30 @@ export function summarize(lines, since) {
     for (const p of parts) {
       if (p?.type !== "tool_use") continue;
       if (EDITORS.has(p.name) && typeof p.input?.file_path === "string") {
-        files.add(basename(p.input.file_path));
+        paths.add(p.input.file_path);
       } else if (p.name === "Bash" && typeof p.input?.command === "string") {
         const cmd = p.input.command;
         const subject = /git\s+commit/.test(cmd) ? commitSubject(cmd) : null;
         if (subject) commits.push(subject);
-        const head = commandHead(cmd);
-        if (head) commands.add(head);
+        const act = actOf(commandHead(cmd));
+        if (act) acts.add(act);
       }
     }
   }
 
-  const bits = [];
-  if (files.size) bits.push(`edited ${list([...files], 4)}`);
-  if (commands.size) bits.push(`ran ${list([...commands], 3)}`);
-  if (commits.length) bits.push(`committed ${commits.slice(-2).map((c) => `"${c}"`).join(", ")}`);
-  if (!bits.length) return null;
+  const where = phrase([...new Set([...paths].map(areaOf).filter(Boolean))]);
 
-  const text = [project, bits.join(" · ")].filter(Boolean).join(" · ");
+  let body;
+  if (commits.length) {
+    body = `shipped a change${where ? ` to ${where}` : ""} — "${commits[commits.length - 1]}"`;
+  } else if (paths.size) {
+    body = `working on ${where ?? "it"}`;
+  } else if (acts.size) {
+    body = [...acts].join(" and ");
+  } else {
+    return null;
+  }
+
+  const text = [project, body].filter(Boolean).join(" · ");
   return { text: text.length > MAX_LEN ? text.slice(0, MAX_LEN - 1) + "…" : text, until };
 }

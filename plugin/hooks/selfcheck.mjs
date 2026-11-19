@@ -72,14 +72,29 @@ const lines = [
   "{ truncated half-written line",
 ];
 
+// A teammate should learn what kind of work happened, not read your shell
+// history. Posting file and command lists turned a day into 134 unreadable
+// lines and described how someone works in far more detail than they agreed to.
 const sum = summarize(lines, "");
 assert.ok(sum, "activity must be summarised");
-assert.match(sum.text, /useDM\.ts/, "names the file");
+assert.match(sum.text, /shipped a change to the frontend/, "says what kind of work it was");
+assert.match(sum.text, /"Send video in a DM"/, "keeps the commit subject, which is written to be read");
+assert.doesNotMatch(sum.text, /useDM/, "never names a file");
+assert.doesNotMatch(sum.text, /npm run build/, "never names a command");
 assert.doesNotMatch(sum.text, /\/Users\//, "never leaks an absolute path");
-assert.match(sum.text, /npm run build/, "names the command");
-assert.match(sum.text, /committed "Send video in a DM"/, "quotes the commit subject");
-assert.equal((sum.text.match(/useDM\.ts/g) ?? []).length, 1, "api-request-blob must not double-count");
 assert.equal(sum.until, "2026-11-03T10:05:00Z", "cursor advances to the newest entry");
+
+// Edits with no commit: still worth a line, still no file names.
+{
+  const edits = summarize([entry("2026-11-03T12:00:00Z", [edit("/Users/x/projects/ping/supabase/functions/group-api/index.ts")])], "");
+  assert.equal(edits.text, "ping · working on the backend", "edits alone say where, not what file");
+}
+
+// Housekeeping commands used to post "ran ls, cd" — noise with no signal.
+assert.equal(summarize([entry("2026-11-03T13:00:00Z", [bash("ls"), bash("cd /tmp")])], ""), null,
+  "unrecognised commands post nothing");
+assert.match(summarize([entry("2026-11-03T13:00:00Z", [bash("npm test")])], "").text, /running tests/,
+  "but a test run is worth saying");
 assert.equal(summarize(lines, "2026-11-03T10:05:00Z"), null, "nothing new since the cursor -> no post");
 assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name: "Read", input: { file_path: "/x/a.ts" } }])], ""), null,
   "reading a file is not doing something");
