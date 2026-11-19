@@ -63,9 +63,24 @@ export function seal(text, key) {
 // Pass-through is deliberate: a room can hold both encrypted messages from
 // plugin members and plaintext ones from a webhook or a client without the key,
 // and refusing to render the second kind would hide half the room.
+const SEALED_RE = /ping-e2e:v\d+:[A-Za-z0-9_-]+:[A-Za-z0-9_-]+/g;
+
 export function open(payload, key) {
-  if (typeof payload !== "string" || !payload.startsWith(MARKER)) return payload;
-  if (!key) return payload;
+  if (typeof payload !== "string" || !key) return payload;
+  // A server-built string can carry sealed values INSIDE it rather than being
+  // one. ping_digest and ping_catchup paste a whole timeline into a single
+  // field, each line prefixed with "[author · kind] ", so nothing started with
+  // the marker and nothing opened — the digest handed the agent a wall of
+  // ciphertext and asked it to summarise. Each value is still whole, so each
+  // opens in place. A value that fails simply stays as it was, which is also
+  // what happens to a message that merely talks about ciphertext.
+  if (!payload.startsWith(MARKER)) {
+    return SEALED_RE.test(payload) ? payload.replace(SEALED_RE, (m) => openOne(m, key)) : payload;
+  }
+  return openOne(payload, key);
+}
+
+function openOne(payload, key) {
   const [ivB64, bodyB64] = payload.slice(MARKER.length).split(":");
   if (!ivB64 || !bodyB64) return payload;
   try {

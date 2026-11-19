@@ -8,6 +8,7 @@ import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
+import { newRoomKey, keyFrom, seal, openDeep } from "./ping-crypto.mjs";
 
 // --- @mention -------------------------------------------------------------
 assert.equal(mentionsMe("hey @rohan can you look", "rohan"), true, "plain mention");
@@ -18,6 +19,23 @@ assert.equal(mentionsMe("@Rohan please review", "Rohan Pandey"), true, "first wo
 assert.equal(mentionsMe("@Rohan Pandey please", "Rohan Pandey"), true, "full multi-word name");
 assert.equal(mentionsMe("nothing here", "rohan"), false, "no mention");
 assert.equal(mentionsMe("@rohan", undefined), false, "no name configured");
+
+// --- sealed values inside a server-built string ---------------------------
+// ping_digest and ping_catchup paste the whole timeline into ONE field, each
+// line prefixed with "[author · kind] ". Nothing started with the marker, so
+// nothing opened: the digest handed the agent a wall of ciphertext and asked
+// it to summarise a day's work from it.
+{
+  const key = keyFrom(newRoomKey());
+  const timeline = `[rohan · log] ${seal("working on the frontend", key)}\n[Mac · log] ${seal("shipped it", key)}`;
+  const opened = openDeep({ timeline }, key).timeline;
+  assert.match(opened, /\[rohan · log\] working on the frontend/, "an embedded sealed value opens in place");
+  assert.match(opened, /\[Mac · log\] shipped it/, "every one of them, not just the first");
+  assert.doesNotMatch(opened, /ping-e2e:/, "nothing sealed is left behind");
+  // A message that merely talks about ciphertext must survive untouched.
+  const chat = "it showed ping-e2e:v1:aaaa:bbbb which means it failed";
+  assert.equal(openDeep({ t: chat }, key).t, chat, "an undecryptable match is left exactly as it was");
+}
 
 // --- join flags ------------------------------------------------------------
 // Windows PowerShell strips embedded double quotes when it calls a native
