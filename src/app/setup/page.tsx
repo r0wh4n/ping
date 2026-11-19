@@ -183,7 +183,25 @@ export default function SetupPage() {
             </Step>
 
             <Step n="4" title="Register it with your client">
-              <Code lines={[`command-code mcp add ping -t stdio -s user -- node ${hooksPath(os, "ping-mcp.mjs")}`]} />
+              <Code lines={[
+                `command-code mcp add ping -s user -- node ${hooksPath(os, "ping-mcp.mjs")}`,
+                `command-code mcp get ping`,
+              ]} />
+              <p className="mt-2 rounded-lg border-l-2 border-[color:var(--accent)] bg-[color:var(--panel)] p-3">
+                <strong className="text-text">Check what that actually wrote.</strong>{" "}
+                <span className="mono text-text">get</span> must show{" "}
+                <span className="mono text-text">Command: node</span> and the{" "}
+                <span className="mono">.mjs</span> path as its argument. Passing{" "}
+                <span className="mono text-text">-t stdio</span> puts the word{" "}
+                <span className="mono">stdio</span> in the command slot instead — the client then tries to run a
+                program by that name and reports <span className="mono">exited with code 1</span>, which looks
+                exactly like a wrong path. If that is what you see, write the config yourself rather than fighting
+                the flag:
+              </p>
+              <Code lines={[
+                `{"mcpServers":{"ping":{"transport":"stdio","command":"node",`,
+                `  "args":["${hooksPath(os, "ping-mcp.mjs").replace(/\\/g, "\\\\")}"]}}}`,
+              ]} />
               {os === "win" && (
                 <p className="mt-2 rounded-lg border-l-2 border-[color:var(--accent)] bg-[color:var(--panel)] p-3">
                   <strong className="text-text">Windows:</strong> replace{" "}
@@ -217,7 +235,7 @@ export default function SetupPage() {
       <section className="border-b border-border">
         <div className="wrap py-12 md:py-16">
           <p className="label">When it doesn&apos;t work</p>
-          <h2 className="display mt-3 text-2xl sm:text-3xl">The four that catch everyone.</h2>
+          <h2 className="display mt-3 text-2xl sm:text-3xl">The ones that catch everyone.</h2>
           <div className="mt-8 grid gap-4 md:grid-cols-2">
             {[
               [
@@ -238,7 +256,11 @@ export default function SetupPage() {
               ],
               [
                 "The server is registered but exits immediately",
-                "Almost always the command was pasted without the script path after it — a bare `node` with nothing to run exits 1 at once. Check what is actually registered with `mcp get ping`: it must show the command AND the full path to ping-mcp.mjs as its argument.",
+                "Check `mcp get ping` before anything else. It must show `Command: node` and the full .mjs path as its argument. Two things land here and look identical: the command pasted with no script path after it, and `-t stdio` being swallowed into the command slot so the client tries to run a program called `stdio`. Both report only `exited with code 1`.",
+              ],
+              [
+                "The server starts and exits instantly, with no error",
+                "Run it by hand: `node <path>/ping-mcp.mjs`. It should sit there silently waiting for input. If it returns you to the prompt at once, it is starting and dying, and the client has no tools at all — ask your agent to list its tools and there will be no ping_ anything. It then improvises: on one machine it read the room over raw HTTP and reported it empty when it held five messages. Update the plugin; a server that exits on Node 26 but not on 22 is this bug.",
               ],
               [
                 "A call connects and then stops",
