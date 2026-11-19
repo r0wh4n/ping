@@ -165,12 +165,18 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
 // client leaves — and must phrase it exactly as the hook does, or the same
 // work would read differently depending on which app someone happened to use.
 {
-  const log = "\x01" + "2026-11-19T10:00:00Z\x00Add the invite expiry\nsrc/app/page.tsx\nsrc/lib/invite.ts\n"
-            + "\x01" + "2026-11-19T10:05:00Z\x00Harden the join guard\nsupabase/functions/group-api/index.ts\n";
+  const log = "\x01" + "2026-11-19T10:00:00Z\x00me@example.com\x00Add the invite expiry\nsrc/app/page.tsx\nsrc/lib/invite.ts\n"
+            + "\x01" + "2026-11-19T10:05:00Z\x00THEM@example.com\x00Harden the join guard\nsupabase/functions/group-api/index.ts\n";
   const commits = parseCommitLog(log);
   assert.equal(commits.length, 2, "both commits parsed from one exec");
-  assert.equal(commits[0].subject, "Add the invite expiry", "subject split from the timestamp");
+  assert.equal(commits[0].subject, "Add the invite expiry", "subject split from the timestamp and author");
   assert.deepEqual(commits[1].files, ["supabase/functions/group-api/index.ts"], "files belong to their own commit");
+  // A pull lands everyone else's commits in the same window. Without the
+  // author, the first teammate to pull told the room they had shipped work
+  // somebody else wrote — it happened in a live room, four minutes after.
+  assert.equal(commits[0].email, "me@example.com", "author carried, for filtering to this machine");
+  assert.equal(commits[1].email, "them@example.com", "and lowercased, since git addresses vary in case");
+  assert.equal(commits.filter((c) => c.email === "me@example.com").length, 1, "someone else's commit is separable");
   assert.equal(describeCommit(commits[1].subject, commits[1].files),
     'shipped a change to the backend — "Harden the join guard"', "same sentence the hook writes");
   assert.equal(parseCommitLog("").length, 0, "no commits, nothing to say");

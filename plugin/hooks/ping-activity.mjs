@@ -137,8 +137,13 @@ export function parseStatus(stdout) {
 }
 
 /**
- * `git log --format=%x01%cI%x00%s --name-only` into {at, subject, files}.
- * One exec, newest first, parsed here so it can be tested without a repo.
+ * `git log --format=%x01%cI%x00%ae%x00%s --name-only` into
+ * {at, email, subject, files}. One exec, newest first, parsed here so it can
+ * be tested without a repo.
+ *
+ * The author's address is carried because a pull brings in everyone else's
+ * commits: without it, the first teammate to run `git pull` told the room they
+ * had shipped work somebody else wrote, minutes after that person shipped it.
  */
 export function parseCommitLog(stdout) {
   return String(stdout || "")
@@ -147,8 +152,13 @@ export function parseCommitLog(stdout) {
     .filter(Boolean)
     .map((chunk) => {
       const [head, ...rest] = chunk.split("\n");
-      const [at, subject] = head.split("\x00");
-      return { at, subject: (subject ?? "").trim(), files: rest.map((l) => l.trim()).filter(Boolean) };
+      const [at, email, subject] = head.split("\x00");
+      return {
+        at,
+        email: (email ?? "").trim().toLowerCase(),
+        subject: (subject ?? "").trim(),
+        files: rest.map((l) => l.trim()).filter(Boolean),
+      };
     })
     .filter((c) => c.at && c.subject);
 }

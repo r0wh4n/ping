@@ -130,8 +130,13 @@ async function autoLog(room, key) {
   // rate limit and say nothing.
   const since = room.logged_at;
   stamp();
-  const log = await git(dir, ["log", `--since=${since}`, "--no-merges", "-n", "5", "--format=%x01%cI%x00%s", "--name-only"]);
-  const commits = log === null ? [] : parseCommitLog(log).reverse(); // oldest first, as they happened
+  const log = await git(dir, ["log", `--since=${since}`, "--no-merges", "-n", "5", "--format=%x01%cI%x00%ae%x00%s", "--name-only"]);
+  // Only what THIS machine wrote. A pull lands everybody else's commits in the
+  // same window, and the room was told the person who pulled had shipped them.
+  const me = (await git(dir, ["config", "user.email"]))?.trim().toLowerCase();
+  const commits = (log === null ? [] : parseCommitLog(log))
+    .filter((c) => !me || !c.email || c.email === me)
+    .reverse(); // oldest first, as they happened
   let lines = commits.map((c) => describeCommit(c.subject, c.files));
 
   if (!lines.length) {
