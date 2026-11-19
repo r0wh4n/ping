@@ -30,7 +30,7 @@ const CORS: Record<string, string> = {
   "Access-Control-Allow-Headers": "authorization, content-type, mcp-session-id, mcp-protocol-version, accept",
 };
 
-type Tool = { name: string; description: string; action: string; inputSchema: object };
+type Tool = { name: string; description: string; action: string; inputSchema: ReturnType<typeof S> };
 
 const S = (props: object, required: string[] = []) => ({
   type: "object",
@@ -51,6 +51,15 @@ const ROLES = [
   "frontend", "backend", "fullstack", "mobile", "devops", "security",
   "data", "qa", "design", "docs", "research", "product", "other",
 ] as const;
+
+const DOING = {
+  type: "string",
+  description:
+    "What you are working on right now, in one short line and your own words — e.g. 'building a snake game', " +
+    "'deleting the old prototype', 'researching 5 security advisories'. Always include it. Your teammates read " +
+    "the room instead of interrupting you, and this is what tells them; file changes alone cannot say what the " +
+    "work is for. It is posted to the room once when it changes, never repeated.",
+};
 
 const TOOLS: Tool[] = [
   { name: "ping_create_group", action: "create_group", description: "Create a new room — a shared space where several AIs chat and pass context — and get a shareable invite link. Pass your_name to also join it yourself and get your member token. No account or key needed.", inputSchema: S({ name: { type: "string", description: "room name, e.g. 'Acme build squad'" }, your_name: { type: "string", description: "your display name — pass it to join your own room right away" }, role: { type: "string", enum: [...ROLES], description: "what your human does on this team. ASK THEM — don't guess from the code you happen to be looking at." } }, ["name"]) },
@@ -288,7 +297,23 @@ export async function POST(req: Request) {
   if (method === "ping") return result(req, id, {});
 
   if (method === "tools/list") {
-    return result(req, id, { tools: TOOLS.map(({ name, description, inputSchema }) => ({ name, description, inputSchema })) });
+    // Every tool asks what the agent is working on. Claude Code's task can be
+    // read out of its transcript; no other client exposes one, so a room with
+    // a Cursor, Codex or Command Code agent in it knew only what the
+    // filesystem showed — and "working on the frontend" is equally true of
+    // building something and deleting it.
+    //
+    // The schema is the one thing every MCP client obeys, and the agent is
+    // already a model the person pays for: it writes the line itself, in its
+    // own words, at the moment it acts. Ping needs no key of its own for this,
+    // the same way ping_catchup and ping_digest need none.
+    return result(req, id, {
+      tools: TOOLS.map(({ name, description, inputSchema }) => ({
+        name,
+        description,
+        inputSchema: { ...inputSchema, properties: { ...(inputSchema.properties ?? {}), doing: DOING } },
+      })),
+    });
   }
 
   if (method === "tools/call") {
@@ -305,6 +330,13 @@ export async function POST(req: Request) {
     const args = { ...((params?.arguments as Record<string, unknown>) ?? {}) };
     const roomArg = args.room;
     delete args.room; // selector, not a group-api field
+
+    // What the agent says it is doing, carried on the call. Posted as a work
+    // log entry and then removed — group-api has never heard of this field.
+    // Fired and not awaited for its result: a report must never slow down or
+    // fail the call it rode in on.
+    const doing = typeof args.doing === "string" ? args.doing.trim().slice(0, 140) : "";
+    delete args.doing;
     let override: string | null = null;
     if (roomArg !== undefined && roomArg !== null && roomArg !== "") {
       if (typeof roomArg === "string" && roomArg.startsWith("gm_")) override = roomArg;
@@ -323,6 +355,9 @@ export async function POST(req: Request) {
         "Authorization Bearer token, then chat with ping_say / ping_read / ping_share."
       );
 
+    if (doing && action !== "log" && effToken?.startsWith("gm_")) {
+      void callGroupApi(effToken, { action: "log", text: doing }).catch(() => null);
+    }
     const data = await callGroupApi(effToken, { action, ...args });
     return result(req, id, {
       content: [{ type: "text", text: JSON.stringify(withUpdateNotice(data, req), null, 2) }],

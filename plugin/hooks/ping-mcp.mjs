@@ -205,7 +205,39 @@ async function toolList() {
         try { return d ? [JSON.parse(d)] : []; } catch { return []; }
       }).find((m) => m.id === 1)
     : JSON.parse(body);
-  return rpc?.result ?? { tools: [] };
+  return withDoing(rpc?.result ?? { tools: [] });
+}
+
+// Every tool asks what you are working on.
+//
+// Claude Code can be read: the task is in its transcript. No other client
+// exposes one, so a room with a Cursor, Codex or Command Code agent in it knew
+// only what the filesystem showed — "working on the frontend", equally true of
+// building a snake game and deleting one.
+//
+// The tool schema is the one thing every MCP client obeys. Putting the task on
+// the call itself costs no extra round trip, needs no hooks, and reads the same
+// whatever the agent is: the model fills it in its own words at the moment it
+// acts, which is exactly when it knows.
+const DOING = {
+  type: "string",
+  description:
+    "What you are working on right now, in one short line and your own words — e.g. 'building a snake game', " +
+    "'deleting the old prototype', 'researching 5 security advisories'. Always include it. Your teammates read " +
+    "the room instead of interrupting you, and this is what tells them; file changes alone cannot say what the " +
+    "work is for. It is posted to the room once when it changes, never repeated.",
+};
+
+function withDoing(result) {
+  const tools = Array.isArray(result?.tools) ? result.tools : [];
+  return {
+    ...result,
+    tools: tools.map((t) => {
+      const schema = t?.inputSchema;
+      if (!schema || typeof schema !== "object" || schema.properties?.doing) return t;
+      return { ...t, inputSchema: { ...schema, properties: { ...(schema.properties ?? {}), doing: DOING } } };
+    }),
+  };
 }
 
 // Pull the text payload out of an MCP tool result so we can open what's in it.
@@ -307,9 +339,25 @@ async function handleCall(id, params) {
       error: "Not in a Ping room from this directory. Run /ping <invite-link>, or /ping new <name>." }) }], isError: true };
   }
   key = keyFrom(room.key);
-  // Before anything else: put this agent's own work in the room. Any client,
-  // no hooks required. Never allowed to break the call it rode in on.
-  if (name !== "ping_log") await autoLog(room, key).catch(() => null);
+  // The agent said what it is doing, on the call. Post it if it has changed,
+  // then take it off: the server has never heard of this field.
+  let said = null;
+  if (typeof args?.doing === "string") {
+    const doing = args.doing.trim().slice(0, 140);
+    const { doing: _dropped, ...rest } = args;
+    args = rest;
+    if (doing && doing !== room.logged_text) {
+      await callRemote("ping_log", sealArgs("ping_log", { text: doing }, key), room.token).catch(() => null);
+      updateState((st) => ({
+        ...st,
+        rooms: (st.rooms ?? []).map((r) => (r.token === room.token ? { ...r, logged_text: doing } : r)),
+      }));
+      said = doing;
+    }
+  }
+  // Then whatever the filesystem shows. Any client, no hooks required. Never
+  // allowed to break the call it rode in on.
+  if (name !== "ping_log") await autoLog(said ? { ...room, logged_text: said } : room, key).catch(() => null);
   const rpc = await callRemote(name, sealArgs(name, args, key), room.token);
   if (rpc?.error) throw new Error(rpc.error.message ?? "Ping server error.");
   // Leaving voids this token on the server, so the room has to go from here
