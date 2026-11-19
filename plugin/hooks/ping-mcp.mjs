@@ -36,6 +36,8 @@ function activeRoom() {
 
 const execFileP = promisify(execFile);
 const LOG_EVERY_MS = 60_000;
+// How long the same words stay stale before they count as news again.
+const REPEAT_AFTER_MS = 10 * 60_000;
 
 const git = async (dir, args) => {
   try {
@@ -149,8 +151,14 @@ async function autoLog(room, key) {
       : parseStatus(await git(dir, ["status", "--porcelain"]));
     const line = describeWork(dirty);
     // Only when it says something new — "working on the backend" every minute
-    // for an hour is the noise this whole change exists to remove.
-    if (line && line !== room.logged_text) lines = [line];
+    // for an hour is the noise this whole change exists to remove. But
+    // identical forever is its own failure: an agent built a snake game, a
+    // calculator and a tic-tac-toe game in one stretch, each of which the
+    // watcher could only call "working on it", and the room heard about the
+    // first and then nothing for the rest. After a quiet spell the same words
+    // are news again, because they now describe different work.
+    const saidAgo = room.logged_said_at ? Date.now() - Date.parse(room.logged_said_at) : Infinity;
+    if (line && (line !== room.logged_text || saidAgo > REPEAT_AFTER_MS)) lines = [line];
   }
   if (!lines.length) return;
 
@@ -159,7 +167,10 @@ async function autoLog(room, key) {
   }
   updateState((st) => ({
     ...st,
-    rooms: (st.rooms ?? []).map((r) => (r.token === room.token ? { ...r, logged_text: lines[lines.length - 1] } : r)),
+    rooms: (st.rooms ?? []).map((r) =>
+      r.token === room.token
+        ? { ...r, logged_text: lines[lines.length - 1], logged_said_at: new Date().toISOString() }
+        : r),
   }));
 }
 
