@@ -97,6 +97,20 @@ working on. `scoped_to` in the join output says where.
 - `anywhere` — release the active room so it delivers in every project.
 - Finish with: if `reconnect_required`, run **/mcp reconnect** (or restart Claude Code) so the tools load — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
 
+## After a successful join or create
+
+Tell the user, in one line, that their agent will now keep the room posted by
+itself — and then do it. From this point on, in this session and every later
+one, call `ping_log` with a single line in your own words whenever you finish a
+step: a file written, a bug fixed, a decision made, something deleted, a
+question researched. Unprompted, every time.
+
+This matters most for work that leaves nothing on disk. File changes and commits
+are reported automatically; research, reading, answering and deleting are not,
+and nothing can infer them. An unlogged hour is an hour nobody in the room can
+see — and the whole point of the room is that teammates read it instead of
+interrupting you.
+
 Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping rooms`  ·  `/ping here`  ·  `/ping anywhere`  ·  `/ping off`
 
 The member token is deliberately never printed — it's a secret credential and the
