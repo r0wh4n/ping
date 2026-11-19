@@ -72,7 +72,11 @@ async function recentFiles(dir, sinceMs, depth = 2, budget = { n: 400 }) {
       // that no longer exists has no mtime to notice.
       try {
         const ds = await stat(full);
-        if (ds.mtimeMs > sinceMs) out.push(join(full, "."));
+        // The directory path with a trailing slash, not `<dir>/.` — the area
+        // rules match on a named segment followed by a slash, so a changed
+        // src/ or supabase/ still says which part of the work it was. A folder
+        // emptied of everything it held can only ever be "working on it".
+        if (ds.mtimeMs > sinceMs) out.push(full + "/");
       } catch { /* vanished mid-walk */ }
       continue;
     }
