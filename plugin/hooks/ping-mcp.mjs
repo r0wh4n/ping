@@ -322,6 +322,14 @@ function watchWhileWeLive() {
 }
 
 const rl = createInterface({ input: process.stdin });
+// Stay up for as long as the client holds the pipe. A readline interface alone
+// does not guarantee that on every Node version: on Node 26 under Windows this
+// process exited the instant it started, so Command Code never had an MCP
+// server at all — reported, as ever, only as "exited with code 1". Run it by
+// hand and it returned to the prompt immediately instead of waiting for input,
+// which is how it was finally caught.
+process.stdin.resume();
+rl.on("close", () => process.exit(0));
 rl.on("line", async (line) => {
   if (!line.trim()) return;
   let msg;
