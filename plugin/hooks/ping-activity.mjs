@@ -62,11 +62,28 @@ const actOf = (cmd) => ACTS.find(([re]) => re.test(cmd))?.[1] ?? null;
 
 // `git commit -F -` with a heredoc is as common here as `-m`, so try both and
 // fall back to saying nothing rather than guessing wrong.
+//
+// Scoped to the segment that actually RUNS git commit. Testing the whole
+// command string meant any script or heredoc that merely mentioned the words
+// donated its own -m "..." to the room: a real session here posted `shipped a
+// change — "base"`, a subject nobody ever wrote, lifted out of a Python
+// heredoc that happened to contain the phrase. Splitting on && and ; but NOT
+// on newlines keeps a heredoc body attached to the command it feeds.
+function commitSegment(cmd) {
+  return cmd
+    .split(/\s*(?:&&|\|\||;)\s*/)
+    .find((seg) => /^\s*(?:\w+=\S+\s+)*git\b[^\n]*\bcommit\b/.test(seg));
+}
+
 function commitSubject(cmd) {
-  const m = cmd.match(/-m\s+["']([^"']{3,120})/);
-  if (m) return m[1];
-  const heredoc = cmd.match(/<<\s*'?EOF'?\s*\n([^\n]{3,120})/);
-  return heredoc ? heredoc[1] : null;
+  const seg = commitSegment(cmd);
+  if (!seg) return null;
+  const inline = seg.split("\n")[0].match(/-m\s+["']([^"']{3,120})/);
+  if (inline) return inline[1];
+  // The delimiter is whatever the caller chose — EOF, MSG, COMMIT — and the
+  // subject is the first line after it.
+  const heredoc = seg.match(/<<\s*'?([A-Za-z_][A-Za-z0-9_]*)'?\s*\n([^\n]{3,120})/);
+  return heredoc ? heredoc[2] : null;
 }
 
 // The recognisable head of a command: `npm run build`, `git push`, `node x.mjs`.
@@ -113,7 +130,7 @@ export function summarize(lines, since) {
         paths.add(p.input.file_path);
       } else if (p.name === "Bash" && typeof p.input?.command === "string") {
         const cmd = p.input.command;
-        const subject = /git\s+commit/.test(cmd) ? commitSubject(cmd) : null;
+        const subject = commitSubject(cmd);
         if (subject) commits.push(subject);
         const act = actOf(commandHead(cmd));
         if (act) acts.add(act);

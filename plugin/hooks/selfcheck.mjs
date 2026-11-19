@@ -95,6 +95,23 @@ assert.equal(summarize([entry("2026-11-03T13:00:00Z", [bash("ls"), bash("cd /tmp
   "unrecognised commands post nothing");
 assert.match(summarize([entry("2026-11-03T13:00:00Z", [bash("npm test")])], "").text, /running tests/,
   "but a test run is worth saying");
+
+// A commit subject is the one piece of free text that reaches the room, so it
+// has to come from a real commit. Both of these were caught by running the
+// summariser over an actual session transcript, not by the fixture above.
+{
+  // A script that merely MENTIONS the words donated its subject to the room:
+  // a live session posted `shipped a change — "base"` from a Python heredoc.
+  const impostor = bash(`cd /tmp/x && python3 - <<'PY'\ns = 'git commit -m "base"'\nPY`);
+  assert.equal(summarize([entry("2026-11-03T14:00:00Z", [impostor])], ""), null,
+    "a command that only mentions git commit is not a commit");
+
+  // The heredoc delimiter is whatever the caller picked; only EOF was handled,
+  // so every <<'MSG' commit silently lost its subject.
+  const msg = bash(`git add -A && git commit -q -F - <<'MSG'\nSay what kind of work happened\nMSG`);
+  assert.match(summarize([entry("2026-11-03T15:00:00Z", [msg])], "").text,
+    /shipped a change — "Say what kind of work happened"/, "any heredoc delimiter, not just EOF");
+}
 assert.equal(summarize(lines, "2026-11-03T10:05:00Z"), null, "nothing new since the cursor -> no post");
 assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name: "Read", input: { file_path: "/x/a.ts" } }])], ""), null,
   "reading a file is not doing something");
