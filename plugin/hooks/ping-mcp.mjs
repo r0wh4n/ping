@@ -313,7 +313,11 @@ function watchWhileWeLive() {
       const room = activeRoom();
       if (room) await autoLog(room, keyFrom(room.key));
     } catch { /* never let a background tick take the session down */ }
-  }, LOG_EVERY_MS);
+    // Three times a minute against a once-a-minute gate. Ticking at exactly
+    // LOG_EVERY_MS put every tick on the boundary, where a few milliseconds of
+    // jitter decided whether it was rate-limited away — so half of them did
+    // nothing and work could sit unreported for two minutes.
+  }, Math.max(5_000, Math.round(LOG_EVERY_MS / 3)));
   ticking.unref?.();
 }
 
