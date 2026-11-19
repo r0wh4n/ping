@@ -66,6 +66,14 @@ async function recentFiles(dir, sinceMs, depth = 2, budget = { n: 400 }) {
     const full = join(dir, e.name);
     if (e.isDirectory()) {
       if (depth > 0) out.push(...(await recentFiles(full, sinceMs, depth - 1, budget)));
+      // A folder's own timestamp moves when something is created or REMOVED
+      // in it. Without this, deleting work was invisible: the room went on
+      // reporting a snake game that had just been deleted, because a file
+      // that no longer exists has no mtime to notice.
+      try {
+        const ds = await stat(full);
+        if (ds.mtimeMs > sinceMs) out.push(join(full, "."));
+      } catch { /* vanished mid-walk */ }
       continue;
     }
     try {
