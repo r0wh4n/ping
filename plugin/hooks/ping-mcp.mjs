@@ -48,44 +48,58 @@ const git = async (dir, args) => {
   }
 };
 
-const SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "venv", "__pycache__", "target"]);
+const SKIP = new Set([
+  "node_modules", ".git", "dist", "build", ".next", "venv", "__pycache__", "target",
+  // Not work, and enormous. A home directory is a perfectly normal place for a
+  // client to be started from, and AppData sorts before Desktop: a depth-first
+  // walk spent its whole budget inside AppData\\Local and never reached the
+  // three apps someone had just built on their desktop.
+  "AppData", "Application Data", "Library", "OneDrive", "Windows", "Program Files",
+  "Program Files (x86)", "ProgramData", ".cache", ".local", ".nvm", "Pictures", "Music", "Videos",
+]);
 
 /**
- * Files touched since `sinceMs`, two levels deep, capped.
+ * Files touched since `sinceMs`, breadth-first, capped.
  *
  * git is the better signal, but plenty of real work has no repo behind it —
  * someone asks an agent for a calculator on the Desktop and it writes three
  * files. Watching only git meant that work existed nowhere in the room.
  * Names are read to classify and never sent.
+ *
+ * Breadth-first on purpose: every directory at one level is visited before any
+ * of their children, so a single huge subtree cannot exhaust the budget and
+ * hide everything beside it.
  */
-async function recentFiles(dir, sinceMs, depth = 2, budget = { n: 400 }) {
+async function recentFiles(dir, sinceMs, depth = 2, budget = 1200) {
   const out = [];
-  let entries;
-  try { entries = await readdir(dir, { withFileTypes: true }); } catch { return out; }
-  for (const e of entries) {
-    if (budget.n-- <= 0) break;
-    if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
-    const full = join(dir, e.name);
-    if (e.isDirectory()) {
-      if (depth > 0) out.push(...(await recentFiles(full, sinceMs, depth - 1, budget)));
-      // A folder's own timestamp moves when something is created or REMOVED
-      // in it. Without this, deleting work was invisible: the room went on
-      // reporting a snake game that had just been deleted, because a file
-      // that no longer exists has no mtime to notice.
-      try {
-        const ds = await stat(full);
-        // The directory path with a trailing slash, not `<dir>/.` — the area
-        // rules match on a named segment followed by a slash, so a changed
-        // src/ or supabase/ still says which part of the work it was. A folder
-        // emptied of everything it held can only ever be "working on it".
-        if (ds.mtimeMs > sinceMs) out.push(full + "/");
-      } catch { /* vanished mid-walk */ }
-      continue;
+  let level = [dir];
+  for (let d = 0; d <= depth && level.length && budget > 0; d++) {
+    const next = [];
+    for (const current of level) {
+      if (budget <= 0) break;
+      let entries;
+      try { entries = await readdir(current, { withFileTypes: true }); } catch { continue; }
+      for (const e of entries) {
+        if (budget-- <= 0) break;
+        if (e.name.startsWith(".") || SKIP.has(e.name)) continue;
+        const full = join(current, e.name);
+        try {
+          const st = await stat(full);
+          if (e.isDirectory()) {
+            // A folder's own timestamp moves when something is created or
+            // REMOVED in it. Without this, deleting work was invisible: a room
+            // went on reporting a snake game that had just been deleted,
+            // because a file that no longer exists has no mtime to notice.
+            // The trailing slash lets a changed src/ still name its area.
+            if (st.mtimeMs > sinceMs) out.push(full + "/");
+            if (d < depth) next.push(full);
+          } else if (st.mtimeMs > sinceMs) {
+            out.push(full);
+          }
+        } catch { /* vanished between readdir and stat */ }
+      }
     }
-    try {
-      const st = await stat(full);
-      if (st.mtimeMs > sinceMs) out.push(full);
-    } catch { /* vanished between readdir and stat */ }
+    level = next;
   }
   return out;
 }
