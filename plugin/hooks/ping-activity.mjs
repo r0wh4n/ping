@@ -78,12 +78,26 @@ function commitSegment(cmd) {
 function commitSubject(cmd) {
   const seg = commitSegment(cmd);
   if (!seg) return null;
-  const inline = seg.split("\n")[0].match(/-m\s+["']([^"']{3,120})/);
+  const head = seg.split("\n")[0];
+
+  const inline = head.match(/-m\s+["']([^"']{3,120})/);
   if (inline) return inline[1];
-  // The delimiter is whatever the caller chose — EOF, MSG, COMMIT — and the
-  // subject is the first line after it.
-  const heredoc = seg.match(/<<\s*'?([A-Za-z_][A-Za-z0-9_]*)'?\s*\n([^\n]{3,120})/);
-  return heredoc ? heredoc[2] : null;
+
+  // `git commit -F -` fed by a heredoc. The body cannot be read out of the
+  // segment: `<<'MSG' && git log` puts the redirect and its body on opposite
+  // sides of the split, which is how this repo writes every commit. So find
+  // the delimiter in the segment and the body in the whole command — it is
+  // simply the line after the redirect.
+  const delim = head.match(/<<\s*['"]?([A-Za-z_][A-Za-z0-9_]*)['"]?/)?.[1];
+  if (!delim) return null;
+  const lines = cmd.split("\n");
+  const open = lines.findIndex((l) => new RegExp(`<<\\s*['"]?${delim}['"]?`).test(l));
+  // A real heredoc closes on a line of its own. Without that this is a string
+  // that merely contains the words — a fixture, a script being written — and
+  // its next line is not a commit subject.
+  if (open < 0 || !lines.slice(open + 1).some((l) => l.trim() === delim)) return null;
+  const subject = (lines[open + 1] ?? "").trim();
+  return subject.length >= 3 && subject.length <= 120 ? subject : null;
 }
 
 // The recognisable head of a command: `npm run build`, `git push`, `node x.mjs`.

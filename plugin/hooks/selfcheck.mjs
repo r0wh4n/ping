@@ -111,6 +111,15 @@ assert.match(summarize([entry("2026-11-03T13:00:00Z", [bash("npm test")])], "").
   const msg = bash(`git add -A && git commit -q -F - <<'MSG'\nSay what kind of work happened\nMSG`);
   assert.match(summarize([entry("2026-11-03T15:00:00Z", [msg])], "").text,
     /shipped a change — "Say what kind of work happened"/, "any heredoc delimiter, not just EOF");
+
+  // The shape this repo actually commits in. Splitting the command on && put
+  // the redirect and its body in different segments, so the subject vanished
+  // and the room was told nothing at all — the live room stayed silent through
+  // two real commits before this was caught.
+  const chained = bash(`git commit -q -F - <<'MSG' && git log --oneline -1\nRead a commit subject only from the command that makes it\n\nbody line\nMSG`);
+  assert.match(summarize([entry("2026-11-03T16:00:00Z", [chained])], "").text,
+    /shipped a change — "Read a commit subject only from the command that makes it"/,
+    "a heredoc whose body is separated from its redirect by &&");
 }
 assert.equal(summarize(lines, "2026-11-03T10:05:00Z"), null, "nothing new since the cursor -> no post");
 assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name: "Read", input: { file_path: "/x/a.ts" } }])], ""), null,
