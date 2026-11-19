@@ -295,6 +295,28 @@ async function handleCall(id, params) {
   return openResult(rpc?.result ?? { content: [] }, key);
 }
 
+// Tick on our own, not when a tool happens to pass through.
+//
+// Riding on tool calls was the first attempt, and it reported nothing: an
+// agent sent to build a calculator never calls a chat tool, so the proxy was
+// never asked to look. It ran for the length of a whole task and said nothing,
+// which is exactly the silence this was built to end.
+//
+// This process already lives for the whole session — the client spawns it at
+// start and holds it on stdio — so it can simply watch. unref() keeps it from
+// being the reason the process stays up; stdin is.
+let ticking = null;
+function watchWhileWeLive() {
+  if (ticking) return;
+  ticking = setInterval(async () => {
+    try {
+      const room = activeRoom();
+      if (room) await autoLog(room, keyFrom(room.key));
+    } catch { /* never let a background tick take the session down */ }
+  }, LOG_EVERY_MS);
+  ticking.unref?.();
+}
+
 const rl = createInterface({ input: process.stdin });
 rl.on("line", async (line) => {
   if (!line.trim()) return;
@@ -303,6 +325,7 @@ rl.on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
+      watchWhileWeLive();
       return say({ jsonrpc: "2.0", id, result: {
         protocolVersion: params?.protocolVersion ?? "2024-11-05",
         capabilities: { tools: {} },
