@@ -46,7 +46,7 @@ const AREAS = [
   [/(^|\/)(supabase|server|api|backend|db|functions|routes)\//i, "the backend"],
   [/\.(tsx|jsx|css|scss|html|vue|svelte)$/i, "the frontend"],
   [/(^|\/)(components?|pages?|app|ui|styles?|public|src)\//i, "the frontend"],
-  [/(^|\/)(scripts?|bin|tools?)\//i, "tooling"],
+  [/(^|\/)(scripts?|bin|tools?|hooks?|plugin)\//i, "tooling"],
 ];
 const areaOf = (path) => AREAS.find(([re]) => re.test(path))?.[1] ?? null;
 
@@ -111,6 +111,49 @@ const commandHead = (cmd) => {
 const phrase = (areas) => (areas.length ? areas.slice(0, 2).join(" and ") : null);
 
 /**
+ * One line for a commit. Shared by the Claude Code hook, which reads the
+ * session transcript, and the MCP proxy, which reads git — so a Cursor or
+ * Codex agent's commit reads exactly like a Claude Code one in the room.
+ */
+export function describeCommit(subject, files = []) {
+  const where = phrase([...new Set(files.map(areaOf).filter(Boolean))]);
+  return `shipped a change${where ? ` to ${where}` : ""} — "${subject}"`;
+}
+
+/** One line for work in progress, from whatever files are currently dirty. */
+export function describeWork(files = []) {
+  if (!files.length) return null;
+  const where = phrase([...new Set(files.map(areaOf).filter(Boolean))]);
+  return `working on ${where ?? "it"}`;
+}
+
+/** `git status --porcelain` into the paths it names. */
+export function parseStatus(stdout) {
+  return String(stdout || "")
+    .split("\n")
+    .map((l) => l.slice(3).trim())          // "XY path", and " -> " for renames
+    .map((l) => (l.includes(" -> ") ? l.split(" -> ")[1] : l))
+    .filter(Boolean);
+}
+
+/**
+ * `git log --format=%x01%cI%x00%s --name-only` into {at, subject, files}.
+ * One exec, newest first, parsed here so it can be tested without a repo.
+ */
+export function parseCommitLog(stdout) {
+  return String(stdout || "")
+    .split("\x01")
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .map((chunk) => {
+      const [head, ...rest] = chunk.split("\n");
+      const [at, subject] = head.split("\x00");
+      return { at, subject: (subject ?? "").trim(), files: rest.map((l) => l.trim()).filter(Boolean) };
+    })
+    .filter((c) => c.at && c.subject);
+}
+
+/**
  * @param lines raw transcript lines (JSONL, newest last)
  * @param since ISO timestamp already reported; only later entries count
  * @returns {{text: string, until: string} | null} null when nothing happened
@@ -156,7 +199,7 @@ export function summarize(lines, since) {
 
   let body;
   if (commits.length) {
-    body = `shipped a change${where ? ` to ${where}` : ""} — "${commits[commits.length - 1]}"`;
+    body = describeCommit(commits[commits.length - 1], [...paths]);
   } else if (paths.size) {
     body = `working on ${where ?? "it"}`;
   } else if (acts.size) {

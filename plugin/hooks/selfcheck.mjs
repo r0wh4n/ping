@@ -6,7 +6,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
-import { summarize } from "./ping-activity.mjs";
+import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
 
 // --- @mention -------------------------------------------------------------
@@ -140,6 +140,29 @@ assert.match(summarize([entry("2026-11-03T13:00:00Z", [bash("npm test")])], "").
 assert.equal(summarize(lines, "2026-11-03T10:05:00Z"), null, "nothing new since the cursor -> no post");
 assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name: "Read", input: { file_path: "/x/a.ts" } }])], ""), null,
   "reading a file is not doing something");
+
+// --- what the proxy posts for a client with no hooks ----------------------
+// Cursor, Codex and Command Code have no hook system, so nothing they did ever
+// reached the room. The proxy reads git instead — the one record of work every
+// client leaves — and must phrase it exactly as the hook does, or the same
+// work would read differently depending on which app someone happened to use.
+{
+  const log = "\x01" + "2026-11-19T10:00:00Z\x00Add the invite expiry\nsrc/app/page.tsx\nsrc/lib/invite.ts\n"
+            + "\x01" + "2026-11-19T10:05:00Z\x00Harden the join guard\nsupabase/functions/group-api/index.ts\n";
+  const commits = parseCommitLog(log);
+  assert.equal(commits.length, 2, "both commits parsed from one exec");
+  assert.equal(commits[0].subject, "Add the invite expiry", "subject split from the timestamp");
+  assert.deepEqual(commits[1].files, ["supabase/functions/group-api/index.ts"], "files belong to their own commit");
+  assert.equal(describeCommit(commits[1].subject, commits[1].files),
+    'shipped a change to the backend — "Harden the join guard"', "same sentence the hook writes");
+  assert.equal(parseCommitLog("").length, 0, "no commits, nothing to say");
+
+  assert.deepEqual(parseStatus(" M src/app/page.tsx\n?? notes.md\nR  a.ts -> b.ts\n"),
+    ["src/app/page.tsx", "notes.md", "b.ts"], "porcelain, renames included");
+  assert.equal(describeWork(["src/app/page.tsx"]), "working on the frontend", "a dirty tree is work in flight");
+  assert.equal(describeWork([]), null, "a clean tree says nothing");
+  assert.equal(describeWork(["plugin/hooks/ping-mcp.mjs"]), "working on tooling", "the plugin's own files classify");
+}
 
 // --- where an automatic status post goes ----------------------------------
 // `status on` with no active room used to post nowhere, silently, forever.

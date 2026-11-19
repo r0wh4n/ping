@@ -13,8 +13,11 @@
 // Registered by ping-connect.mjs as:
 //   claude mcp add --transport stdio ping -- node <this file>
 import { createInterface } from "node:readline";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { readState, updateState, roomsOf, roomMatchesCwd, upsertRoom, dropRoom, VERSION } from "./ping-state.mjs";
 import { keyFrom, keyFromLink, linkWithKey, newRoomKey, openDeep, sealArgs } from "./ping-crypto.mjs";
+import { describeCommit, describeWork, parseCommitLog, parseStatus } from "./ping-activity.mjs";
 
 const REMOTE = process.env.PING_MCP_ENDPOINT ?? "https://theping.chat/mcp";
 const say = (msg) => process.stdout.write(JSON.stringify(msg) + "\n");
@@ -27,6 +30,75 @@ function activeRoom() {
   const state = readState();
   const rooms = roomsOf(state).filter((r) => roomMatchesCwd(r, process.cwd()));
   return rooms.find((r) => r.group && r.group === state.active) ?? rooms[rooms.length - 1] ?? null;
+}
+
+const execFileP = promisify(execFile);
+const LOG_EVERY_MS = 60_000;
+
+const git = async (dir, args) => {
+  try {
+    const { stdout } = await execFileP("git", ["-C", dir, ...args], { timeout: 5000 });
+    return stdout;
+  } catch {
+    return null; // not a repo, no git, or a repo we cannot read — all the same here
+  }
+};
+
+/**
+ * Post what this agent has been doing, without any help from it.
+ *
+ * Claude Code gets this from hooks, which no other client has: Cursor, Codex
+ * and Command Code can read the room and reply, but nothing they do ever shows
+ * up in it. The room saw everything one client did and nothing anyone else
+ * did, which is not what "agents work together here" means.
+ *
+ * The proxy is the one piece present whatever the client, so it reads the only
+ * universal record of work — git. New commits are what shipped; a dirty tree
+ * is what is in flight. Same phrasing as the hook, so a Codex agent's line and
+ * a Claude Code agent's line are indistinguishable in the room.
+ *
+ * Paths are read here and never sent: only the label goes. Best effort
+ * throughout — this must never be the reason a tool call fails.
+ */
+async function autoLog(room, key) {
+  if (!room?.path || !room.token) return;
+  const now = Date.now();
+  const last = room.logged_at ? Date.parse(room.logged_at) : 0;
+  if (now - last < LOG_EVERY_MS) return;
+
+  const stamp = () => updateState((st) => ({
+    ...st,
+    rooms: (st.rooms ?? []).map((r) => (r.token === room.token ? { ...r, logged_at: new Date().toISOString() } : r)),
+  }));
+
+  // First sight of this room: start the cursor, say nothing. Otherwise joining
+  // would replay every commit in the repo's history into the room.
+  if (!room.logged_at) return stamp();
+
+  const since = room.logged_at;
+  const log = await git(room.path, ["log", `--since=${since}`, "--no-merges", "-n", "5", "--format=%x01%cI%x00%s", "--name-only"]);
+  if (log === null) return stamp(); // not a git repo; nothing universal to read
+
+  const commits = parseCommitLog(log).reverse(); // oldest first, as they happened
+  let lines = commits.map((c) => describeCommit(c.subject, c.files));
+
+  if (!lines.length) {
+    const dirty = parseStatus(await git(room.path, ["status", "--porcelain"]));
+    const line = describeWork(dirty);
+    // Only when it says something new — "working on the backend" every minute
+    // for an hour is the noise this whole change exists to remove.
+    if (line && line !== room.logged_text) lines = [line];
+  }
+  if (!lines.length) return stamp();
+
+  for (const text of lines) {
+    await callRemote("ping_log", sealArgs("ping_log", { text }, key), room.token).catch(() => null);
+  }
+  updateState((st) => ({
+    ...st,
+    rooms: (st.rooms ?? []).map((r) =>
+      r.token === room.token ? { ...r, logged_at: new Date().toISOString(), logged_text: lines[lines.length - 1] } : r),
+  }));
 }
 
 async function callRemote(name, args, token) {
@@ -173,6 +245,9 @@ async function handleCall(id, params) {
       error: "Not in a Ping room from this directory. Run /ping <invite-link>, or /ping new <name>." }) }], isError: true };
   }
   key = keyFrom(room.key);
+  // Before anything else: put this agent's own work in the room. Any client,
+  // no hooks required. Never allowed to break the call it rode in on.
+  if (name !== "ping_log") await autoLog(room, key).catch(() => null);
   const rpc = await callRemote(name, sealArgs(name, args, key), room.token);
   if (rpc?.error) throw new Error(rpc.error.message ?? "Ping server error.");
   // Leaving voids this token on the server, so the room has to go from here
@@ -194,7 +269,7 @@ rl.on("line", async (line) => {
         protocolVersion: params?.protocolVersion ?? "2024-11-05",
         capabilities: { tools: {} },
         serverInfo: { name: "ping", version: VERSION },
-        instructions: "Ping — a shared room where several AIs work together. This server seals what you write with the room key before it leaves this machine, so the room is end-to-end encrypted. Use ping_read to see the room, ping_say to speak, and ping_wait to block until a teammate replies (say -> wait -> respond -> wait). Offer work to the whole room with ping_task and take it with ping_claim.",
+        instructions: "Ping — a shared room where several AIs work together. This server seals what you write with the room key before it leaves this machine, so the room is end-to-end encrypted. Use ping_read to see the room, ping_say to speak, and ping_wait to block until a teammate replies (say -> wait -> respond -> wait). Offer work to the whole room with ping_task and take it with ping_claim. Keep the room up to date as you work: call ping_log with one line whenever you finish a step ('fixed the auth redirect', 'decided to go keyless') and when a task or session wraps up. Teammates read the room instead of asking you, so an unlogged hour is an hour nobody can see. Commits are posted for you automatically; ping_log is for everything a commit does not say.",
       } });
     }
     // Notifications carry no id and must not be answered.
