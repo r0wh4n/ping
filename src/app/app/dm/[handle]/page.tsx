@@ -4,13 +4,14 @@ import { unlessSelecting } from "@/lib/select";
 import { sendsMessage, grow } from "@/lib/compose";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type ChangeEvent, type ClipboardEvent } from "react";
 import { useProfile } from "@/hooks/useProfile";
 import { useDM, type DMsg } from "@/hooks/useDM";
 import { fmtTime } from "@/lib/time";
 import Markdown from "@/components/Markdown";
 import { isSaved, toggleSave } from "@/lib/saved";
 import { useCallUI } from "@/components/CallOverlay";
+import VoicePlayer from "@/components/VoicePlayer";
 
 const QUICK = ["❤️", "😂", "👍", "😮", "😢", "🔥"];
 
@@ -60,84 +61,6 @@ const SnapIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
     <circle cx="12" cy="12" r="3.5" fill="currentColor" stroke="none" />
   </svg>
 );
-
-// Compact monochrome voice-note player. Falls back to the stored duration when
-// the browser reports Infinity for MediaRecorder webm blobs (a known quirk).
-function VoicePlayer({ src, secs, mine }: { src: string; secs?: number; mine: boolean }) {
-  const ref = useRef<HTMLAudioElement>(null);
-  const [playing, setPlaying] = useState(false);
-  const [cur, setCur] = useState(0);
-  const [dur, setDur] = useState(secs ?? 0);
-  const [rate, setRate] = useState(1);
-  // A codec the browser can't decode fires `play` and then errors, which looked
-  // exactly like playing silently. Say so instead.
-  const [dead, setDead] = useState(false);
-  const remaining = Math.max(0, Math.round((dur || secs || 0) - cur));
-  const pct = dur ? Math.min(100, (cur / dur) * 100) : 0;
-  const toggle = (e: MouseEvent) => {
-    e.stopPropagation();
-    const a = ref.current;
-    if (!a) return;
-    if (playing) a.pause();
-    else a.play().catch(() => setDead(true));
-  };
-  const cycleRate = (e: MouseEvent) => {
-    e.stopPropagation();
-    const next = rate === 1 ? 1.5 : rate === 1.5 ? 2 : 1;
-    setRate(next);
-    if (ref.current) ref.current.playbackRate = next;
-  };
-  return (
-    <div
-      className={`flex items-center gap-3 rounded-2xl px-3 py-2.5 ${
-        mine ? "bg-[color:var(--bubble-out-bg)] text-[color:var(--bubble-out-fg)]" : "border border-border bg-[color:var(--panel)] text-text"
-      }`}
-    >
-      <button
-        onClick={toggle}
-        aria-label={playing ? "Pause" : "Play"}
-        className={`grid h-9 w-9 shrink-0 place-items-center rounded-full text-sm ${
-          mine ? "bg-[color:var(--bg)] text-[color:var(--text)]" : "bg-[color:var(--bubble-out-bg)] text-[color:var(--bubble-out-fg)]"
-        }`}
-      >
-        {playing ? "❚❚" : "▶"}
-      </button>
-      <div className={`h-1 w-24 overflow-hidden rounded-full ${mine ? "bg-[color:var(--bubble-out-fg)]/20" : "bg-[color:var(--muted)]/25"}`}>
-        <div className={`h-full rounded-full ${mine ? "bg-[color:var(--bubble-out-fg)]/70" : "bg-[color:var(--muted)]"}`} style={{ width: `${pct}%` }} />
-      </div>
-      <span className="mono text-xs tabular-nums opacity-80">{dead ? "can't play" : mmss(remaining)}</span>
-      {/* Tap to cycle 1× → 1.5× → 2×. Per note, not remembered across them. */}
-      <button
-        onClick={cycleRate}
-        aria-label={`Playback speed ${rate}×`}
-        className="mono shrink-0 rounded-full px-1 text-[11px] tabular-nums opacity-70"
-      >
-        {rate}×
-      </button>
-      <audio
-        ref={ref}
-        src={src}
-        preload="metadata"
-        onLoadedMetadata={(e) => {
-          const d = e.currentTarget.duration;
-          if (isFinite(d) && d > 0) setDur(d);
-          e.currentTarget.playbackRate = rate;
-        }}
-        onError={() => {
-          setPlaying(false);
-          setDead(true);
-        }}
-        onTimeUpdate={(e) => setCur(e.currentTarget.currentTime)}
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => {
-          setPlaying(false);
-          setCur(0);
-        }}
-      />
-    </div>
-  );
-}
 
 export default function DMPage() {
   const params = useParams();
