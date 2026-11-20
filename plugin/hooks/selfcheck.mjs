@@ -92,6 +92,11 @@ assert.equal(mentionsMe("@rohan", undefined), false, "no name configured");
   assert.deepEqual(fileOps("shell_command", { command: 'Remove-Item -Path "C:\\Users\\me\\Desktop\\snake.html" -Force' }),
     [{ op: "deleted", path: "C:\\Users\\me\\Desktop\\snake.html" }], "PowerShell, as Command Code on Windows runs it");
   assert.deepEqual(fileOps("shell_command", { command: "npm run build && rm -rf dist" }).map((o) => o.path), ["dist"], "only the delete in a chain");
+  // Exactly the shape a Windows run posted with a stray quote in the room.
+  assert.deepEqual(fileOps("shell_command", { command: 'Remove-Item "a.html","b-pro.html","c.html"' }).map((o) => o.path),
+    ["a.html", "b-pro.html", "c.html"], "a PowerShell list loses every quote, not just the outer ones");
+  assert.deepEqual(fileOps("shell_command", { command: 'Remove-Item -Path "a.html", "b.html" -Force' }).map((o) => o.path),
+    ["a.html", "b.html"], "a spaced PowerShell list too");
   assert.deepEqual(fileOps("shell_command", { command: "ls -la" }), [], "a command that deletes nothing reports nothing");
   assert.deepEqual(fileOps("read_file", { absolute_path: "/a/b.txt" }), [], "reading is not doing");
   assert.deepEqual(fileOps("write_file", { file_path: "/a/calc.html", content: "x" }), [{ op: "wrote", path: "/a/calc.html" }], "a write");

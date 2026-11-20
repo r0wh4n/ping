@@ -92,7 +92,12 @@ export function deletedByShell(command) {
     else continue;
     for (const w of words.slice(i)) {
       if (w === "--" || /^-/.test(w) || /^\/[a-z]$/i.test(w)) continue; // -rf, -Force, --, /s /q
-      for (const part of w.replace(/^["']|["']$/g, "").split(",")) if (part) out.push(part);
+      // PowerShell lists several targets as one token: "a.html","b.html". Quotes come
+      // off each name, not just the ends of the token, or a stray " reaches the room.
+      for (const part of w.split(",")) {
+        const name = part.replace(/^["'\s]+|["'\s]+$/g, "");
+        if (name) out.push(name);
+      }
     }
   }
   return out;
