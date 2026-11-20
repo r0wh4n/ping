@@ -8,7 +8,7 @@ import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus, taskFrom } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
-import { classifyTask, isHumanPrompt, cleanPrompt, patchPaths, transcriptPrompt } from "./ping-adapter.mjs";
+import { classifyTask, isHumanPrompt, cleanPrompt, patchPaths, transcriptPrompt, transcriptTurn, claimOnce, appendLine, readLines } from "./ping-adapter.mjs";
 import { mkdtempSync, writeFileSync as writeTmp } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
@@ -67,6 +67,21 @@ assert.equal(mentionsMe("@rohan", undefined), false, "no name configured");
   ].join("\n"));
   assert.equal(transcriptPrompt(tp), "second request", "the latest request with text, never a tool result");
   assert.equal(transcriptPrompt(joinPath(dir, "missing.jsonl")), null, "no transcript yet means no request yet");
+
+  // Hooks for one event run in parallel. A live room got the same started line twice,
+  // a second apart, because two processes each saw "not started yet".
+  const marker = joinPath(dir, "turn.started");
+  assert.equal(claimOnce(marker), true, "the first claim wins");
+  assert.equal(claimOnce(marker), false, "every later claim loses, so a line posts once");
+  const lp = joinPath(dir, "turn.paths");
+  appendLine(lp, "src/a.tsx");
+  appendLine(lp, "src/b.tsx");
+  assert.deepEqual(readLines(lp), ["src/a.tsx", "src/b.tsx"], "appended paths all survive");
+  // "continue" twice is two turns; keying on text alone would silence the second.
+  const rp = joinPath(dir, "repeat.jsonl");
+  const msg = (role, text) => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
+  writeTmp(rp, [msg("user", "continue"), msg("assistant", "ok"), msg("user", "continue")].join("\n"));
+  assert.equal(transcriptTurn(rp).index, 2, "the latest request, identified by its position, not its text");
 }
 
 // --- join flags ------------------------------------------------------------

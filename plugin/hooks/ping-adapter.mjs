@@ -9,7 +9,7 @@
 //     names and paths never leave this machine.
 //   - Never write to stdout. Codex adds a hook's stdout to the agent's context, and
 //     Command Code reads it as a decision.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, existsSync, unlinkSync, openSync, closeSync, appendFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { readState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
@@ -53,21 +53,25 @@ export function patchPaths(command) {
 // user message that has text and no tool results. In interactive mode the file
 // exists from the first moment of a turn; in print mode it appears only when the
 // turn ends.
-export function transcriptPrompt(path) {
+//
+// The line number identifies the turn, not just the text: people send "continue"
+// or "yes" more than once, and keying on text alone would silence every repeat.
+export function transcriptTurn(path) {
   if (!path || !existsSync(path)) return null;
   let last = null;
-  for (const line of readFileSync(path, "utf8").split("\n")) {
-    if (!line.trim()) continue;
+  readFileSync(path, "utf8").split("\n").forEach((line, index) => {
+    if (!line.trim()) return;
     let e;
-    try { e = JSON.parse(line); } catch { continue; }
-    if (e.type !== "message" || e.message?.role !== "user") continue;
+    try { e = JSON.parse(line); } catch { return; }
+    if (e.type !== "message" || e.message?.role !== "user") return;
     const parts = Array.isArray(e.message.content) ? e.message.content : [];
-    if (parts.some((p) => p?.type === "tool_result")) continue;
+    if (parts.some((p) => p?.type === "tool_result")) return;
     const text = cleanPrompt(parts.filter((p) => p?.type === "text").map((p) => p.text).join(" "));
-    if (text) last = text;
-  }
+    if (text) last = { text, index };
+  });
   return last;
 }
+export const transcriptPrompt = (path) => transcriptTurn(path)?.text ?? null;
 
 // The room this work belongs to: a room scoped to this directory, preferring the
 // active one. PING_ADAPTER_ROOM picks a room by name, for tests and for people in
@@ -80,6 +84,9 @@ export function pickRoom(cwd) {
 }
 
 export async function postLine(room, text) {
+  // PING_ADAPTER_DRYRUN names a file to append to instead of posting. Tests use it
+  // to count lines without filling a real room.
+  if (process.env.PING_ADAPTER_DRYRUN) return appendLine(process.env.PING_ADAPTER_DRYRUN, text);
   const key = keyFrom(room.key);
   await fetch(API, {
     method: "POST",
@@ -89,10 +96,13 @@ export async function postLine(room, text) {
   }).catch(() => null);
 }
 
-// Per-turn state lives under ~/.ping, is deleted when the turn ends, and holds only a
-// label and the file names that were touched.
-export const stateFile = (client, key) =>
-  join(homedir(), ".ping", "adapters", client, String(key).replace(/[^A-Za-z0-9_-]/g, "_") + ".json");
+// Per-turn state lives under ~/.ping/adapters/<client>/ and holds only a label and
+// the file names that were touched. It is removed when the turn ends; the small
+// started/finished markers are swept after a day.
+export function turnFiles(client, key) {
+  const base = join(homedir(), ".ping", "adapters", client, String(key).replace(/[^A-Za-z0-9_-]/g, "_"));
+  return { label: base + ".json", paths: base + ".paths", started: base + ".started", finished: base + ".finished" };
+}
 export const readJson = (f) => (existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : null);
 export function writeJson(f, v) {
   mkdirSync(dirname(f), { recursive: true });
@@ -100,4 +110,37 @@ export function writeJson(f, v) {
 }
 export function dropFile(f) {
   try { unlinkSync(f); } catch { /* already gone */ }
+}
+
+// Hooks for one event can run in parallel: Command Code runs PostToolUse hooks
+// concurrently, and Codex launches every matching hook at once. "Read the state,
+// then post" let two of them post the same started line a second apart in a live
+// room. Creating a marker with the exclusive flag is atomic, so exactly one
+// process wins and the rest stay quiet.
+export function claimOnce(path) {
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    closeSync(openSync(path, "wx"));
+    return true;
+  } catch {
+    return false; // already claimed, or unwritable: either way, never post twice
+  }
+}
+
+// Appending one short line is safe from parallel processes. Rewriting a JSON list
+// is not: a concurrent read-modify-write drops the other process's entry.
+export function appendLine(path, line) {
+  mkdirSync(dirname(path), { recursive: true });
+  appendFileSync(path, line + "\n");
+}
+export const readLines = (path) => (existsSync(path) ? readFileSync(path, "utf8").split("\n").filter(Boolean) : []);
+
+export function sweep(client, maxAgeMs = 24 * 60 * 60 * 1000) {
+  const dir = join(homedir(), ".ping", "adapters", client);
+  let names = [];
+  try { names = readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    const f = join(dir, name);
+    try { if (Date.now() - statSync(f).mtimeMs > maxAgeMs) unlinkSync(f); } catch { /* raced with another sweep */ }
+  }
 }
