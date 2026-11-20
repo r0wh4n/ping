@@ -14,6 +14,7 @@ import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { readState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
 import { keyFrom, seal } from "./ping-crypto.mjs";
+import { describeWork } from "./ping-activity.mjs";
 
 // The same public anon key and group API that ping-connect.mjs already ships.
 export const API = "https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1/group-api";
@@ -72,6 +73,108 @@ export function transcriptTurn(path) {
   return last;
 }
 export const transcriptPrompt = (path) => transcriptTurn(path)?.text ?? null;
+
+// What a tool call did to which files: created, wrote, edited or deleted. Names are
+// returned here and only leave the machine at the "files" detail level and above.
+const SHELL_TOOLS = new Set(["shell_command", "powershell", "Bash", "shell", "exec_command", "local_shell"]);
+const PATCH_OPS = { Add: "created", Update: "edited", Delete: "deleted" };
+const DELETE_VERBS = /^(rm|rmdir|unlink|del|erase|rd|remove-item|ri)$/i;
+
+// Deletes usually go through a shell (rm, del, Remove-Item), never an edit tool, so
+// a delete-only turn used to report no files at all.
+export function deletedByShell(command) {
+  const out = [];
+  for (const seg of String(command ?? "").split(/&&|\|\||;|\||\n/)) {
+    const words = seg.trim().match(/"[^"]*"|'[^']*'|\S+/g) ?? [];
+    let i = /^sudo$/i.test(words[0] ?? "") ? 1 : 0;
+    if (/^git$/i.test(words[i] ?? "") && /^rm$/i.test(words[i + 1] ?? "")) i += 2;
+    else if (DELETE_VERBS.test(words[i] ?? "")) i += 1;
+    else continue;
+    for (const w of words.slice(i)) {
+      if (w === "--" || /^-/.test(w) || /^\/[a-z]$/i.test(w)) continue; // -rf, -Force, --, /s /q
+      for (const part of w.replace(/^["']|["']$/g, "").split(",")) if (part) out.push(part);
+    }
+  }
+  return out;
+}
+
+export function fileOps(toolName, toolInput) {
+  if (toolName === "apply_patch") {
+    return [...String(toolInput?.command ?? "").matchAll(/^\*\*\* (Add|Update|Delete) File: (.+)$/gm)]
+      .map((m) => ({ op: PATCH_OPS[m[1]], path: m[2].trim() }));
+  }
+  if ((toolName === "write_file" || toolName === "edit_file") && typeof toolInput?.file_path === "string") {
+    return [{ op: toolName === "write_file" ? "wrote" : "edited", path: toolInput.file_path }];
+  }
+  if (SHELL_TOOLS.has(toolName)) {
+    const c = toolInput?.command;
+    const cmd = [Array.isArray(c) ? c.join(" ") : c, ...(Array.isArray(toolInput?.args) ? toolInput.args : [])]
+      .filter((x) => typeof x === "string").join(" ");
+    return deletedByShell(cmd).map((path) => ({ op: "deleted", path }));
+  }
+  return [];
+}
+
+// File names only, grouped by what happened, capped. Never a directory: a path
+// says where someone keeps their work, and often whose work it is.
+const nameOf = (p) => String(p).split(/[\\/]/).filter(Boolean).pop() ?? String(p);
+export function opsSummary(ops, max = 4) {
+  const groups = new Map();
+  for (const { op, path } of ops) {
+    const n = nameOf(path);
+    if (!groups.has(op)) groups.set(op, []);
+    if (!groups.get(op).includes(n)) groups.get(op).push(n);
+  }
+  let shown = 0;
+  let hidden = 0;
+  const parts = [];
+  for (const [op, names] of groups) {
+    const take = names.slice(0, Math.max(0, max - shown));
+    hidden += names.length - take.length;
+    shown += take.length;
+    if (take.length) parts.push(`${op} ${take.join(", ")}`);
+  }
+  return parts.length ? parts.join("; ") + (hidden ? ` +${hidden} more` : "") : null;
+}
+
+// Requests carry secrets: one in this project's own history pasted a password and
+// an API key. At the "task" level, keyword-introduced values, credentialed URLs and
+// long key-shaped strings are removed before anything is posted.
+export function redact(text) {
+  return String(text ?? "")
+    .replace(/\b(password|passwd|pwd|passcode|token|secret|api[\s_-]?key)\b(\s*(?:is|=|:|-)?\s*)\S+/gi, "$1$2[redacted]")
+    .replace(/\b[a-z][a-z0-9+.-]*:\/\/[^\s/:@]+:[^\s/@]+@/gi, "[redacted]@")
+    .replace(/[A-Za-z0-9_\-]{24,}/g, "[redacted]");
+}
+
+export function firstSentence(text, max = 110) {
+  const s = String(text ?? "").split(/(?<=[.!?])\s/)[0].trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const sp = cut.lastIndexOf(" ");
+  return (sp > max / 2 ? cut.slice(0, sp) : cut).trimEnd() + "…";
+}
+
+// How much of their own work a person shares, chosen per room on their machine with
+// /ping detail. Labels unless they have said otherwise.
+export const DETAIL_LEVELS = ["labels", "files", "task"];
+export const detailOf = (room) => (DETAIL_LEVELS.includes(room?.detail) ? room.detail : "labels");
+
+export const startedLine = (client, label, task, detail) =>
+  `${client} · started: ${label}` + (detail === "task" && task ? ` — "${task}"` : "");
+
+export function finishedLine(client, label, ops, detail) {
+  const tail = detail === "labels" ? describeWork(ops.map((o) => o.path)) : opsSummary(ops);
+  return `${client} · finished: ${label}` + (tail ? ` · ${tail}` : "");
+}
+
+// One "op<TAB>path" line per file a tool call touched. A line with no tab came from
+// the previous version, which recorded edits only.
+export const readOps = (file) =>
+  readLines(file).map((l) => {
+    const tab = l.indexOf("\t");
+    return tab < 0 ? { op: "edited", path: l } : { op: l.slice(0, tab), path: l.slice(tab + 1) };
+  });
 
 // The room this work belongs to: a room scoped to this directory, preferring the
 // active one. PING_ADAPTER_ROOM picks a room by name, for tests and for people in

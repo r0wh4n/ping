@@ -8,7 +8,7 @@ import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus, taskFrom } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
-import { classifyTask, isHumanPrompt, cleanPrompt, patchPaths, transcriptPrompt, transcriptTurn, claimOnce, appendLine, readLines } from "./ping-adapter.mjs";
+import { classifyTask, isHumanPrompt, cleanPrompt, patchPaths, transcriptPrompt, transcriptTurn, claimOnce, appendLine, readLines, fileOps, opsSummary, redact, startedLine, finishedLine, detailOf } from "./ping-adapter.mjs";
 import { mkdtempSync, writeFileSync as writeTmp } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
@@ -82,6 +82,31 @@ assert.equal(mentionsMe("@rohan", undefined), false, "no name configured");
   const msg = (role, text) => JSON.stringify({ type: "message", message: { role, content: [{ type: "text", text }] } });
   writeTmp(rp, [msg("user", "continue"), msg("assistant", "ok"), msg("user", "continue")].join("\n"));
   assert.equal(transcriptTurn(rp).index, 2, "the latest request, identified by its position, not its text");
+}
+
+// --- detail levels: what each tool did, and how much of it is shared ----------
+{
+  assert.deepEqual(fileOps("apply_patch", { command: "*** Begin Patch\n*** Add File: notes.html\n+x\n*** Delete File: snake.html\n*** Update File: src/a.tsx\n*** End Patch" }),
+    [{ op: "created", path: "notes.html" }, { op: "deleted", path: "snake.html" }, { op: "edited", path: "src/a.tsx" }], "apply_patch says what happened to each file");
+  assert.deepEqual(fileOps("Bash", { command: "rm -- snake.html" }), [{ op: "deleted", path: "snake.html" }], "a shell delete, exactly as Codex sent one");
+  assert.deepEqual(fileOps("shell_command", { command: 'Remove-Item -Path "C:\\Users\\me\\Desktop\\snake.html" -Force' }),
+    [{ op: "deleted", path: "C:\\Users\\me\\Desktop\\snake.html" }], "PowerShell, as Command Code on Windows runs it");
+  assert.deepEqual(fileOps("shell_command", { command: "npm run build && rm -rf dist" }).map((o) => o.path), ["dist"], "only the delete in a chain");
+  assert.deepEqual(fileOps("shell_command", { command: "ls -la" }), [], "a command that deletes nothing reports nothing");
+  assert.deepEqual(fileOps("read_file", { absolute_path: "/a/b.txt" }), [], "reading is not doing");
+  assert.deepEqual(fileOps("write_file", { file_path: "/a/calc.html", content: "x" }), [{ op: "wrote", path: "/a/calc.html" }], "a write");
+  assert.equal(opsSummary([{ op: "wrote", path: "C:\\x\\calc.html" }, { op: "wrote", path: "/y/style.css" }, { op: "deleted", path: "snake.html" }]),
+    "wrote calc.html, style.css; deleted snake.html", "names only, grouped by what happened");
+  assert.match(opsSummary(Array.from({ length: 7 }, (_, i) => ({ op: "wrote", path: `f${i}.js` }))), /\+3 more$/, "capped, with a count of the rest");
+  assert.equal(redact("User ID - alice Password - hunter2-example and key EXAMPLEKEY0123456789abcdefgh"),
+    "User ID - alice Password - [redacted] and key [redacted]", "secrets in a request never reach the room");
+  const made = [{ op: "created", path: "notes.html" }];
+  assert.equal(finishedLine("Codex", "building", made, "labels"), "Codex · finished: building · working on the frontend", "labels: an area, no names");
+  assert.equal(finishedLine("Codex", "building", made, "files"), "Codex · finished: building · created notes.html", "files: names");
+  assert.equal(startedLine("Codex", "building", "build a calculator", "task"), 'Codex · started: building — "build a calculator"', "task: the first sentence of the request");
+  assert.equal(startedLine("Codex", "building", "build a calculator", "files"), "Codex · started: building", "files: still no request text");
+  assert.equal(detailOf({}), "labels", "nothing chosen means labels");
+  assert.equal(detailOf({ detail: "everything" }), "labels", "an unknown level falls back to labels, never up");
 }
 
 // --- join flags ------------------------------------------------------------

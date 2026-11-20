@@ -326,8 +326,25 @@ async function main() {
     return;
   }
 
+  if (mode === "detail") {
+    const level = arg.trim().toLowerCase();
+    if (!["labels", "files", "task"].includes(level)) die("Usage:  /ping detail labels   |   /ping detail files   |   /ping detail task");
+    const before = readState();
+    if (!before.active) die("No active room on this machine. Join one first with /ping <invite-link>.");
+    // Per room, on this machine: the person whose work is reported decides how much
+    // of it is shared, not the room's owner.
+    updateState((s) => ({ ...s, rooms: (s.rooms ?? []).map((r) => (r.group === s.active ? { ...r, detail: level } : r)) }));
+    const notes = {
+      labels: "Posts say what kind of work it is and which part of the project: \"finished: building · working on the frontend\". No file names, no request text.",
+      files: "Posts also name the files touched, by name only: \"finished: building · created calc.html; deleted snake.html\". No paths, no file contents, no request text.",
+      task: "Posts also quote the first sentence of each request, with passwords, keys and tokens stripped, as well as the file names. Turn it back down with /ping detail labels.",
+    };
+    console.log(JSON.stringify({ ok: true, room: before.active, detail: level, note: notes[level] }, null, 2));
+    return;
+  }
+
   if (mode === "join" || mode === "new") return connect(mode, arg);
-  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping rooms   ·   /ping here   ·   /ping anywhere   ·   /ping claim   ·   /ping off');
+  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping rooms   ·   /ping here   ·   /ping anywhere   ·   /ping detail labels|files|task   ·   /ping claim   ·   /ping off');
 }
 
 // Only when run as a command. Without this, importing anything from here —
