@@ -8,6 +8,10 @@ import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus, taskFrom } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
+import { classifyTask, isHumanPrompt, cleanPrompt, patchPaths, transcriptPrompt } from "./ping-adapter.mjs";
+import { mkdtempSync, writeFileSync as writeTmp } from "node:fs";
+import { tmpdir } from "node:os";
+import { join as joinPath } from "node:path";
 import { newRoomKey, keyFrom, seal, openDeep } from "./ping-crypto.mjs";
 
 // --- @mention -------------------------------------------------------------
@@ -35,6 +39,34 @@ assert.equal(mentionsMe("@rohan", undefined), false, "no name configured");
   // A message that merely talks about ciphertext must survive untouched.
   const chat = "it showed ping-e2e:v1:aaaa:bbbb which means it failed";
   assert.equal(openDeep({ t: chat }, key).t, chat, "an undecryptable match is left exactly as it was");
+}
+
+// --- hook adapters (Codex, Command Code) -----------------------------------
+// The adapters report another agent's work as a label and an area only. Each of
+// these was learned from a real run, not from the docs.
+{
+  assert.equal(classifyTask("Create a tic-tac-toe page in tic-tac-toe.html, then reply with done."), "building", "making something is building");
+  assert.equal(classifyTask("tell me 5 news of security"), "researching", "news is research, not building");
+  assert.equal(classifyTask("Read README.txt and reply with its first word."), "reading", "read-only requests say so");
+  assert.equal(classifyTask("hello there"), "working on a task", "no verb, no guess");
+  assert.equal(isHumanPrompt("Create a tic-tac-toe page"), true, "a short request is a person's");
+  assert.equal(isHumanPrompt("## Memory Writing Agent: Phase 2 (Consolidation)\n" + "x".repeat(3000)), false,
+    "Codex's own background turn is not work to report");
+  assert.equal(cleanPrompt("<system-reminder>be nice</system-reminder>  fix the login bug"), "fix the login bug", "injected blocks are stripped");
+  assert.deepEqual(patchPaths("*** Begin Patch\n*** Add File: hello.txt\n+hi\n*** Update File: src/app.tsx\n*** End Patch"),
+    ["hello.txt", "src/app.tsx"], "only the file names from an apply_patch");
+  const dir = mkdtempSync(joinPath(tmpdir(), "ping-adapter-"));
+  const tp = joinPath(dir, "t.jsonl");
+  writeTmp(tp, [
+    JSON.stringify({ type: "session", id: "s" }),
+    JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "first request" }] } }),
+    JSON.stringify({ type: "message", message: { role: "assistant", content: [{ type: "tool_use", name: "write_file" }] } }),
+    JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "tool_result", content: "ok" }] } }),
+    JSON.stringify({ type: "message", message: { role: "user", content: [{ type: "text", text: "second request" }] } }),
+    "",
+  ].join("\n"));
+  assert.equal(transcriptPrompt(tp), "second request", "the latest request with text, never a tool result");
+  assert.equal(transcriptPrompt(joinPath(dir, "missing.jsonl")), null, "no transcript yet means no request yet");
 }
 
 // --- join flags ------------------------------------------------------------
