@@ -23,12 +23,12 @@
     "@supabase/supabase-js": "^2.110.8",
     "geist": "^1.7.2",
     "gsap": "^3.15.0",
-    "next": "16.2.11",
+    "next": "16.4.5",
     "postprocessing": "6.39.6",
     "qrcode": "^1.5.4",
     "react": "19.2.4",
     "react-dom": "19.2.4",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.5",
     "three": "0.187.0",
     "three.quarks": "0.17.1",
     "tweetnacl": "^1.0.3",
@@ -43,7 +43,7 @@
     "@types/react-dom": "^19",
     "@types/three": "0.187.0",
     "eslint": "^9",
-    "eslint-config-next": "16.2.11",
+    "eslint-config-next": "16.4.5",
     "tailwindcss": "^4",
     "typescript": "^5"
   }
