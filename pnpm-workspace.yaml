@@ -1,16 +1,20 @@
 # Force patched versions of build/dev-time transitive deps flagged by `pnpm audit`
-# (postcss/nanoid = build, brace-expansion/js-yaml = eslint, sharp = image gen).
-# None are runtime-exploitable in the deployed app; this just clears the advisories.
+# (postcss/nanoid/source-map-js = build, brace-expansion/js-yaml/minimatch/zod =
+# eslint, sharp = image gen). New pins are exact releases at least two weeks old.
 overrides:
   postcss: ">=8.5.23"
   nanoid: ">=3.3.18"
-  sharp: ">=0.35.0"
-  js-yaml: ">=4.3.1"
-  # Replacement ranges MUST be bounded: an open ">=1.1.18" resolves to the
-  # highest version on the registry (5.x), whose export is not callable, which
-  # breaks minimatch@3's `require('brace-expansion')(...)` and kills eslint.
-  "brace-expansion@<1.1.18": ">=1.1.18 <2"
-  "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9 <6"
+  sharp: "0.35.5"
+  source-map-js: "1.2.2"
+  # @eslint/eslintrc asks for ^4; only the 5.x line has the merge-key CPU bug.
+  js-yaml: "4.3.2"
+  zod: "4.6.7"
+  "@typescript-eslint/typescript-estree>minimatch": "11.0.5"
+  # Pin each major exactly: an open ">=1.1.21" resolves to the highest version
+  # on the registry (5.x), whose export is not callable, which breaks
+  # minimatch@3's `require('brace-expansion')(...)` and kills eslint.
+  "brace-expansion@1": "1.1.21"
+  "brace-expansion@5": "5.0.12"
   # three.quarks depends on quarks.core "*"; pin it to the release that
   # matches three.quarks rather than whatever was published last.
   quarks.core: "0.17.1"
