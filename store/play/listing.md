@@ -44,7 +44,7 @@ Privacy policy: theping.chat/privacy
 **Graphics** (in this folder):
 - `icon-512.png`: 512×512, 32-bit PNG. Google rounds the corners.
 - `feature-graphic.png`: 1024×500, 24-bit PNG with no transparency.
-- Phone screenshots, 2 to 8 at 9:16: to capture from the Android app once the demo accounts exist.
+- `screenshot-1-handle.png`, `screenshot-2-encrypted.png`, `screenshot-3-alerts.png`: phone screenshots at 1080×1920 (9:16, no transparency). Each is a real screen from the Android app on an emulator, as the demo accounts @pingreview and @pingdemo, under a short caption.
 
 ## App content (Policy → App content)
 
