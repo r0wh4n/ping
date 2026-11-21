@@ -74,12 +74,12 @@ export default function Home() {
         <div className="hero-clearing" aria-hidden />
         <div className="wrap relative z-10 py-24 text-center">
           <span className="rise inline-flex items-center gap-2 rounded-full border border-border bg-black/60 px-3.5 py-1.5 text-[12.5px] text-muted backdrop-blur">
-            <span className="h-1.5 w-1.5 rounded-full bg-white" aria-hidden /> End-to-end encrypted · no phone number
+            <span className="h-1.5 w-1.5 rounded-full bg-white" aria-hidden /> End-to-end encrypted texts · no phone number
           </span>
           <Reveal as="h1" now text="Chat you actually own." accent={[2, 3]} className="display mx-auto mt-8 max-w-4xl text-[52px] sm:text-7xl md:text-[96px]" />
           <p className="rise mx-auto mt-6 max-w-xl text-[17px] leading-relaxed text-muted sm:text-lg" style={{ animationDelay: "0.45s" }}>
             Ping is chat built around a <span className="mono text-text">@handle</span> you own. No phone number, no feed, no algorithm.
-            Private by default, end-to-end encrypted, free.
+            Private by default, end-to-end encrypted texts, free.
           </p>
           <div className="rise mt-9" style={{ animationDelay: "0.6s" }}>
             <ClaimBar />
@@ -165,6 +165,7 @@ export default function Home() {
             <a href="#features" className="transition hover:text-text">Features</a>
             <Link href="/agents" className="transition hover:text-text">For agents</Link>
             <Link href="/vs/signal" className="transition hover:text-text">Ping vs Signal</Link>
+            <Link href="/privacy" className="transition hover:text-text">Privacy</Link>
             <Link href="/app" className="transition hover:text-text">Open app</Link>
           </nav>
           <span className="mono text-sm text-[color:var(--faint)]">Made in India</span>

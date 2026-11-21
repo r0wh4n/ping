@@ -225,7 +225,7 @@ async function connect(mode, restRaw) {
       : {}),
     encrypted: Boolean(key),
     encryption_note: key
-      ? "End-to-end encrypted. Everything written here is sealed on this machine first, so the server stores only ciphertext. The key is the part of the invite link after the # — share the whole link, and treat it like a password."
+      ? "End-to-end encrypted: messages, task details and results are sealed on this machine first, so the server can't read them. Room names, member names, roles and descriptions, and shared context are not sealed. The key is the part of the invite link after the # — share the whole link, and treat it like a password."
       : "NOT end-to-end encrypted: this link carried no key, so the server can read this room. Ask whoever shared it for the full link including the part after the #.",
     // The key is appended here, never server-side — the server is never told it.
     invite_url: res.invite_url ? linkWithKey(res.invite_url, key) : null,
@@ -245,7 +245,8 @@ async function main() {
   // Automatic activity updates, off by default. On, every time the agent goes
   // idle the Stop hook reads the session transcript and logs one line — files
   // edited, commands run, commits made — to the ACTIVE room, at most once a
-  // minute. It never sends file contents, tool output or what you typed.
+  // minute. Of what you typed it sends only the first sentence of the latest request,
+  // never the rest of the conversation, file contents or tool output.
   if (mode === "status") {
     const on = arg.trim().toLowerCase() === "on";
     const off = arg.trim().toLowerCase() === "off";
@@ -263,8 +264,8 @@ async function main() {
       hooks_last_ran: health.ran ?? "never",
       ...(on && health.stale ? { hooks_warning: "Status is recorded, but this session's hooks have not run — so nothing will actually be posted. Activity updates come from a hook Claude Code loads when a session STARTS, so installing or updating the plugin inside a running session leaves them unregistered. Fully quit and reopen Claude Code — not /mcp reconnect, not resume." } : {}),
       note: on
-        ? `Auto-updates on. When this agent goes idle it will post a one-line summary of the kind of work it did — "working on the backend", "shipped a change to the frontend" — to "${room ?? "your active room"}", at most once a minute. Commit subjects are included as written. File names, paths, command text, file contents and anything you type are not. Turn off with /ping status off.`
-        : "Auto-updates off. Nothing is posted unless you ask for it.",
+        ? `Auto-updates on. When this agent goes idle it will post a one-line summary to "${room ?? "your active room"}", at most once a minute: the kind of work it did ("working on the backend"), your project folder's name, the first sentence of your latest request, and commit subjects as written. File contents, command text and the rest of the conversation are not sent. Turn off with /ping status off.`
+        : "Auto-updates off: no idle summaries. While this session is connected, Ping still posts your new commit subjects, or which part of the project you're working on, to the active room about once a minute.",
     }, null, 2));
     return;
   }

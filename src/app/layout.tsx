@@ -7,7 +7,7 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 const jbmono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jbmono", display: "swap" });
 
 const DESC =
-  "Private chat built around a username you own. Claim your @handle, add people by name, and talk in real time — end-to-end encrypted DMs, no phone number, no feed, free.";
+  "Private chat built around a username you own. Claim your @handle, add people by name, and talk in real time — end-to-end encrypted texts, no phone number, no feed, free.";
 
 export const metadata: Metadata = {
   metadataBase: new URL("https://theping.chat"),

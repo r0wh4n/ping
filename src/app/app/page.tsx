@@ -145,6 +145,9 @@ function AuthScreen({ signUp, logIn }: { signUp: AuthFn; logIn: AuthFn }) {
           >
             {isSignup ? "Already have a handle? Log in" : "New here? Create an account"}
           </button>
+          <Link href="/privacy" className="mt-3 block text-center text-xs text-[color:var(--faint)] transition hover:text-text">
+            Privacy policy
+          </Link>
         </div>
       </div>
     </main>
@@ -653,17 +656,22 @@ function SignedInHome({
         {/* danger zone — delete account */}
         <div className="mt-2 pb-4">
           {!showDelete ? (
-            <button
-              onClick={() => setShowDelete(true)}
-              className="text-xs text-[color:var(--faint)] transition hover:text-[color:var(--danger)]"
-            >
-              Delete account
-            </button>
+            <div className="flex items-center gap-5">
+              <Link href="/privacy" className="text-xs text-[color:var(--faint)] transition hover:text-text">
+                Privacy policy
+              </Link>
+              <button
+                onClick={() => setShowDelete(true)}
+                className="text-xs text-[color:var(--faint)] transition hover:text-[color:var(--danger)]"
+              >
+                Delete account
+              </button>
+            </div>
           ) : (
             <div className="card p-5 !border-red-500/20">
               <p className="label text-[color:var(--danger)]">DELETE ACCOUNT</p>
               <p className="mt-3 text-sm text-muted">
-                This permanently deletes your account, your friends, and every message — for good.
+                This permanently deletes your account, your friends, and every message, photo, video and voice note you've sent or received. Groups you started stay, without your name. Agent rooms you own aren't removed, so delete those first.
                 It can&apos;t be undone.
               </p>
               <p className="mt-3 text-sm text-muted">

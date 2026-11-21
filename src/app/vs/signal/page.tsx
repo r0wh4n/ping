@@ -5,7 +5,7 @@ import SiteNav from "@/components/site/SiteNav";
 export const metadata: Metadata = {
   title: "Ping vs Signal — private chat with no phone number | theping.chat",
   description:
-    "Signal is excellent, but it needs your phone number. Ping is an open-source chat app where your identity is a @handle you pick — no phone, no email, end-to-end encrypted DMs. Here's an honest Ping vs Signal comparison.",
+    "Signal is excellent, but it needs your phone number. Ping is an open-source chat app where your identity is a @handle you pick — no phone, no email, end-to-end encrypted texts. Here's an honest Ping vs Signal comparison.",
   keywords: [
     "signal alternative",
     "chat without phone number",
@@ -19,7 +19,7 @@ export const metadata: Metadata = {
   openGraph: {
     title: "Ping vs Signal — private chat with no phone number",
     description:
-      "An open-source, anonymous chat app where your identity is just a @handle. No phone number, no email — with end-to-end encrypted DMs.",
+      "An open-source, anonymous chat app where your identity is just a @handle. No phone number, no email — with end-to-end encrypted texts.",
     url: "https://theping.chat/vs/signal",
     siteName: "Ping",
     type: "website",
@@ -38,13 +38,13 @@ const ROWS: [string, string, string, boolean][] = [
   ["Sign-up identity", "A @handle you pick", "Your phone number", true],
   ["Phone number required", "No — never", "Yes, to register", true],
   ["Email required", "No", "No", false],
-  ["End-to-end encryption", "Yes — 1:1 DMs", "Yes — every chat & call", false],
+  ["End-to-end encryption", "Texts in chats & groups — not photos or video yet", "Yes — every chat & call", false],
   ["Open source", "Yes — MIT", "Yes — AGPL/GPL", false],
   ["Runs in a browser", "Yes — nothing to install (PWA)", "No — app install required", true],
   ["Disappearing messages", "Yes — countdown starts after it's seen", "Yes — timer from send", true],
   ["View-once photos & video", "Yes", "No", true],
   ["“Live” no-trace mode", "Yes — nothing written to any server", "No", true],
-  ["Voice & video calls", "Not yet", "Yes", false],
+  ["Voice & video calls", "Yes — 1:1, encrypted by WebRTC", "Yes", false],
   ["Independently audited", "Not yet — new & indie", "Yes — mature & audited", false],
   ["Price", "Free — no ads", "Free — nonprofit", false],
 ];
@@ -56,7 +56,7 @@ const FAQ: [string, string][] = [
   ],
   [
     "Is Ping as secure as Signal?",
-    "Signal is the gold standard: independently audited for years, every chat and call end-to-end encrypted, run by a well-funded nonprofit. Ping is newer and indie — its 1:1 DMs are end-to-end encrypted (the server only ever stores ciphertext), but it hasn't had a formal audit yet and group chats aren't E2E. If your threat model is a nation-state, use Signal. If you want everyday privacy without handing over your phone number, that's exactly what Ping is for — and it's open source, so you can verify it yourself.",
+    "Signal is the gold standard: independently audited for years, every chat and call end-to-end encrypted, run by a well-funded nonprofit. Ping is newer and indie — the text of its chats and groups is end-to-end encrypted, but photos, videos and voice notes aren't yet, and it hasn't had a formal audit. If your threat model is a nation-state, use Signal. If you want everyday privacy without handing over your phone number, that's exactly what Ping is for — and it's open source, so you can verify it yourself.",
   ],
   [
     "Is Ping open source?",
@@ -104,7 +104,7 @@ export default function VsSignalPage() {
             Signal is a superb, audited messenger — and we recommend it for high-risk users. But it still asks for the
             one identifier wired to your bank, your ID, and your face: your <strong className="text-text">phone number</strong>.
             Ping takes a different bet — your whole identity is a <span className="mono text-text">@handle</span> you pick,
-            with end-to-end encrypted DMs and nothing to hand over.
+            with end-to-end encrypted texts and nothing to hand over.
           </p>
           <div className="mt-8 flex flex-wrap items-center gap-3">
             <Link href="/app" className="btn">Claim your @name →</Link>
@@ -176,7 +176,7 @@ export default function VsSignalPage() {
           <div className="mt-8 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {[
               ["A @handle, not a number", "Sign up with a username and password. No phone, no email, no real name — nothing to scrape or leak."],
-              ["End-to-end encrypted DMs", "1:1 messages are encrypted on your device; the server only ever stores ciphertext. We can't read them."],
+              ["End-to-end encrypted texts", "Texts in chats and groups are encrypted on your device, so we can't read them. Photos and video aren't sealed yet."],
               ["Disappearing after it's seen", "Vanish timers start only once the other person actually opens the message — never before."],
               ["View-once photos & video", "Send a snap that opens once, then it's gone (or save it to the chat if you both want to keep it)."],
               ["Live, no-trace mode", "A conversation that exists only while you're both there — nothing written to any server."],
@@ -223,7 +223,7 @@ export default function VsSignalPage() {
       <footer className="border-t border-border">
         <div className="wrap flex flex-col items-center justify-between gap-3 py-8 text-sm text-muted sm:flex-row">
           <Link href="/" className="mono font-bold">ping<span className="text-[color:var(--faint)]">.chat</span></Link>
-          <span className="text-[color:var(--faint)]">Private by default · end-to-end encrypted · open source</span>
+          <span className="text-[color:var(--faint)]">Private by default · end-to-end encrypted texts · open source</span>
         </div>
       </footer>
     </main>
