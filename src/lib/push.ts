@@ -52,3 +52,20 @@ export async function enablePush(userId: string): Promise<{ ok: boolean; error?:
   if (error) return { ok: false, error: error.message };
   return { ok: true };
 }
+
+// Signing out ends notifications on this device too, or a shared phone keeps
+// showing the last person's messages. Removes the stored subscription while
+// the session can still do so, then unsubscribes the browser. Best effort: a
+// browser that refuses never blocks signing out.
+export async function disablePush(): Promise<void> {
+  if (!pushSupported()) return;
+  try {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const sub = await reg?.pushManager.getSubscription();
+    if (!sub) return;
+    await supabase.from("push_subscriptions").delete().eq("endpoint", sub.endpoint);
+    await sub.unsubscribe();
+  } catch {
+    /* sign out regardless */
+  }
+}

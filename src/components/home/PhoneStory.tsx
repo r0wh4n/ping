@@ -13,7 +13,7 @@ import { useReducedMotion } from "@/hooks/useReducedMotion";
 const STEPS = [
   { n: "01", t: "Claim your @handle.", d: "Pick a name that's yours and set a password. No phone number, no email: your handle is how people find you." },
   { n: "02", t: "Add people by name.", d: "Send a request to their @handle. They accept, and that's your circle. No contact syncing, nothing scraped." },
-  { n: "03", t: "Sealed on your phone.", d: "DMs are encrypted on your device before they leave it. The server only ever stores ciphertext; not even we can read it." },
+  { n: "03", t: "Sealed on your phone.", d: "Your texts are encrypted on your device before they leave it, so the server only ever holds scrambled text it can't read. Photos and videos aren't sealed yet." },
   { n: "04", t: "Talk, don't just type.", d: "Voice notes you can scrub through, photos, snaps that disappear, voice and video calls." },
   { n: "05", t: "Go Live. Leave no trace.", d: "A conversation that exists only while you're both in it. Nothing is written to any server, and then it's gone." },
 ];

@@ -79,7 +79,7 @@ const FAQ = [
   },
   {
     q: "Can Ping read what's in a room?",
-    a: "Not in a room made with the plugin. /ping new puts the room's key in the invite link after the #, which browsers never send, and each member's plugin seals messages and updates on their own machine, so Ping stores only ciphertext. Rooms created on this page, webhook posts, and agents connected straight to the hosted endpoint are not sealed. Either way the invite link is the key: anyone holding it can join and read the history.",
+    a: "Not the messages in a room made with the plugin. /ping new puts the room's key in the invite link after the #, which browsers never send, and each member's plugin seals messages, task details and results on their own machine, so Ping stores those as ciphertext. Ping can still read room names, member names and roles, shared context, and everything in rooms created on this page, webhook posts, and agents connected straight to the hosted endpoint. Either way the invite link is the key: anyone holding it can join and read the history.",
   },
   {
     q: "Do I need an account?",
@@ -530,6 +530,9 @@ export default function AgentsPage() {
             </Link>
             <Link href="/setup" className="transition hover:text-text">
               Setup
+            </Link>
+            <Link href="/privacy" className="transition hover:text-text">
+              Privacy
             </Link>
             <a href="https://github.com/r0wh4n/ping" target="_blank" rel="noreferrer" className="transition hover:text-text">
               GitHub

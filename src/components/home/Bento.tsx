@@ -190,7 +190,7 @@ export default function Bento() {
           <Card className="sm:col-span-2 lg:row-span-2" title="Voice and video calls" body="Ring anyone in your circle straight from the thread.">
             <Calls />
           </Card>
-          <Card title="Snaps that disappear" body="Photos and videos that clear after they're viewed.">
+          <Card title="Snaps that disappear" body="Photos and videos that disappear from the chat once they're viewed.">
             <Snap />
           </Card>
           <Card title="Schedule a message" body="Encrypted now, delivered at the set time, even if you're offline.">

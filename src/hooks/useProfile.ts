@@ -16,6 +16,7 @@ import {
   toB64,
 } from "@/lib/crypto";
 import { solvePow } from "@/lib/pow";
+import { disablePush } from "@/lib/push";
 
 export type Profile = { id: string; username: string };
 
@@ -153,6 +154,7 @@ export function useProfile() {
   );
 
   const signOut = useCallback(async () => {
+    await disablePush();
     clearIdentity(profile?.id);
     await supabase.auth.signOut();
     setProfile(null);
@@ -164,10 +166,14 @@ export function useProfile() {
     const res = await supabase.functions.invoke("account-delete", { body: {} });
     if (res.error) return { ok: false, error: "Couldn't reach the server. Please try again." };
     if (!res.data?.ok) return { ok: false, error: res.data?.error ?? "Could not delete account." };
+    // The server already dropped the subscription row; this unsubscribes the
+    // browser and takes the private key off this device as well.
+    await disablePush();
+    clearIdentity(profile?.id);
     await supabase.auth.signOut();
     setProfile(null);
     return { ok: true };
-  }, []);
+  }, [profile?.id]);
 
   return { profile, ready, signUp, logIn, signOut, deleteAccount };
 }
