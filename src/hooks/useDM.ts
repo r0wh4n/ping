@@ -6,6 +6,7 @@ import { supabase } from "@/lib/supabase";
 import { cleanText } from "@/lib/profanity";
 import { getIdentity, encryptFor, decryptFrom } from "@/lib/crypto";
 import { compressVideo } from "@/lib/compressVideo";
+import { stripPhotoMetadata } from "@/lib/stripPhoto";
 import type { Profile } from "@/hooks/useProfile";
 
 export type Reaction = { emoji: string; mine: boolean };
@@ -651,6 +652,15 @@ export function useDM(profile: Profile | null, friendUsername: string) {
         return { ok: false, error: "Photos (PNG, JPG, WEBP, GIF) or video (MP4, MOV, WEBM)." };
       } else if (file.size > MAX_IMAGE_BYTES) {
         return { ok: false, error: "Image must be under 8 MB." };
+      } else {
+        // Location and the other camera details stay on this device. A photo
+        // that can't be cleaned isn't sent with them.
+        try {
+          file = await stripPhotoMetadata(file);
+          type = typeOf(file);
+        } catch {
+          return { ok: false, error: "Couldn't prepare that photo. Try another one." };
+        }
       }
 
       const vext = VIDEO_EXT[type];
@@ -757,10 +767,19 @@ export function useDM(profile: Profile | null, friendUsername: string) {
       const isImage = file.type.startsWith("image/");
       if (!isVideo && !isImage) return { ok: false, error: "Pick a photo or video." };
       if (file.size > MAX_UPLOAD_BYTES) return { ok: false, error: "Snap must be under 50 MB." };
-      const ext = isVideo ? VIDEO_EXT[file.type] ?? "mp4" : EXT[file.type] ?? "jpg";
+      let upload = file;
+      if (isImage) {
+        // Same as sendMedia: no location or camera details leave the device.
+        try {
+          upload = await stripPhotoMetadata(file);
+        } catch {
+          return { ok: false, error: "Couldn't prepare that photo. Try another one." };
+        }
+      }
+      const ext = isVideo ? VIDEO_EXT[upload.type] ?? "mp4" : EXT[upload.type] ?? "jpg";
       const [ua, ub] = [me, friendId.current].sort();
       const path = `${ua}_${ub}/${crypto.randomUUID()}.${ext}`;
-      const up = await supabase.storage.from("dm-media").upload(path, file, { contentType: file.type });
+      const up = await supabase.storage.from("dm-media").upload(path, upload, { contentType: upload.type });
       if (up.error) return { ok: false, error: "Upload failed. Try again." };
 
       const col = isVideo ? { video_path: path } : { image_path: path };
