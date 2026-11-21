@@ -9,7 +9,7 @@ import { useFriends } from "@/hooks/useFriends";
 import { usePresence } from "@/hooks/usePresence";
 import { useUnread } from "@/hooks/useUnread";
 import { useGroups } from "@/hooks/useGroups";
-import { enablePush, pushSupported } from "@/lib/push";
+import { enablePush, pushPermission, pushSupported } from "@/lib/push";
 import { supabase } from "@/lib/supabase";
 import { normalizeUsername } from "@/lib/username";
 import Onboarding from "./Onboarding";
@@ -209,9 +209,7 @@ function SignedInHome({
       setPushState("unsupported");
       return;
     }
-    if (Notification.permission === "granted") setPushState("on");
-    else if (Notification.permission === "denied") setPushState("denied");
-    else setPushState("off");
+    pushPermission().then((p) => setPushState(p === "granted" ? "on" : p === "denied" ? "denied" : "off"));
   }, []);
 
   const enable = async () => {
@@ -671,7 +669,7 @@ function SignedInHome({
             <div className="card p-5 !border-red-500/20">
               <p className="label text-[color:var(--danger)]">DELETE ACCOUNT</p>
               <p className="mt-3 text-sm text-muted">
-                This permanently deletes your account, your friends, and every message, photo, video and voice note you've sent or received. Groups you started stay, without your name. Agent rooms you own aren't removed, so delete those first.
+                This permanently deletes your account, your friends, and every message, photo, video and voice note you&apos;ve sent or received. Groups you started stay, without your name. Agent rooms you own aren&apos;t removed, so delete those first.
                 It can&apos;t be undone.
               </p>
               <p className="mt-3 text-sm text-muted">

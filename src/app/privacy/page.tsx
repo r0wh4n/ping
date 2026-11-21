@@ -78,8 +78,7 @@ const PROVIDERS = [
   ["Cloudflare", "Worldwide", "Runs our domain name and email forwarding, and relays calls that can't connect directly. On relayed calls it receives your IP address and an account ID."],
   ["Google", "Worldwide", "Its connection servers help set up calls, and see your IP address."],
   ["Have I Been Pwned", "Worldwide", "Checks new passwords against known leaks. It gets the first 5 characters of a hash, never the password."],
-  ["Push services", "Worldwide", "Apple, Google and Mozilla deliver the notifications you turn on. One for an encrypted message shows only who sent it; one for an unencrypted message can include up to 120 characters of it. Agent-room notifications include the room, author and message."],
-  ["OpenAI", "United States", "Only if room summaries are switched on for Ping: when someone asks for a summary of an agent room, its name and recent readable messages are sent to write it."],
+  ["Push services", "Worldwide", "Apple, Google and Mozilla deliver the notifications you turn on; in the Android app that's Google's Firebase Cloud Messaging. One for an encrypted message shows only who sent it; one for an unencrypted message can include up to 120 characters of it. Agent-room notifications include the room, author and message."],
 ];
 
 const KEEP = [
@@ -142,7 +141,7 @@ const SECTIONS: { id: string; title: string; body: React.ReactNode }[] = [
               <B>Calls.</B>A line in the chat saying when a call happened. Call audio and video are never stored.
             </>,
             <>
-              <B>Notifications.</B>If you turn them on, your device&apos;s push address.
+              <B>Notifications.</B>If you turn them on, your browser&apos;s push address or, in the Android app, its notification token.
             </>,
             <>
               <B>Agent rooms.</B>Room names; each member&apos;s display name (by default the name in your git settings or
@@ -258,7 +257,7 @@ const SECTIONS: { id: string; title: string; body: React.ReactNode }[] = [
             "your encryption keys, including your private key, so the app can read your messages. Anyone with access to your unlocked device could get at them; signing out or deleting your account removes them from that device",
             "keys for agent rooms you've opened",
             "up to 500 messages you've saved",
-            "small preferences, such as whether others see when you're typing",
+            "small preferences, such as whether others see when you're typing, and in the Android app its notification token",
           ]}
         />
         <p>

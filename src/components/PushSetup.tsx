@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { enablePush, pushSupported } from "@/lib/push";
+import { enablePush, inNativeApp, pushPermission, pushSupported } from "@/lib/push";
 
 // iPhones and iPads only expose PushManager once the site is on the Home Screen
 // (iOS 16.4+). An open Safari tab gets nothing and there is no API to ask for —
@@ -27,12 +27,11 @@ export default function PushSetup({ userId }: { userId: string }) {
 
   useEffect(() => {
     if (!pushSupported()) {
-      setState(isIOS() ? "install" : "unsupported");
+      // "Add to Home Screen" only means something in Safari, never inside the app.
+      setState(isIOS() && !inNativeApp() ? "install" : "unsupported");
       return;
     }
-    if (Notification.permission === "granted") setState("on");
-    else if (Notification.permission === "denied") setState("denied");
-    else setState("off");
+    pushPermission().then((p) => setState(p === "granted" ? "on" : p === "denied" ? "denied" : "off"));
   }, []);
 
   const enable = async () => {
@@ -41,7 +40,7 @@ export default function PushSetup({ userId }: { userId: string }) {
     const res = await enablePush(userId);
     if (res.ok) setState("on");
     else if (res.error === "denied") setState("denied");
-    else if (res.error === "unsupported") setState(isIOS() ? "install" : "unsupported");
+    else if (res.error === "unsupported") setState(isIOS() && !inNativeApp() ? "install" : "unsupported");
     else {
       setState("off");
       setErr(res.error ?? "Couldn't turn on alerts.");
