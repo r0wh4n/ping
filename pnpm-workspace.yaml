@@ -21,6 +21,10 @@ overrides:
   # Pulled in by @react-three/*; held to releases at least two weeks old.
   n8ao: "2.0.1"
   "@babel/runtime": "7.29.13"
+  # Pulled in by @capacitor/cli; held to releases at least two weeks old.
+  "@capacitor/cli>tar": "7.5.22"
+  "rimraf@6>glob": "14.0.4"
+  "glob@14>minimatch": "11.0.5"
 
 # Allow native build scripts (prebuilt binaries otherwise skipped).
 allowBuilds:

@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Ping</string>
+    <string name="title_activity_main">Ping</string>
+    <string name="package_name">chat.theping.app</string>
+    <string name="custom_url_scheme">chat.theping.app</string>
+</resources>
