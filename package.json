@@ -18,6 +18,9 @@
     "check:rpc": "node scripts/check-rpc-surface.mjs"
   },
   "dependencies": {
+    "@capacitor/android": "8.6.0",
+    "@capacitor/core": "8.6.0",
+    "@capacitor/ios": "8.6.0",
     "@react-three/fiber": "9.8.2",
     "@react-three/postprocessing": "3.2.2",
     "@supabase/supabase-js": "^2.110.8",
@@ -35,6 +38,7 @@
     "tweetnacl-util": "^0.15.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "8.6.0",
     "@playwright/test": "^1.63.0",
     "@tailwindcss/postcss": "^4",
     "@types/node": "^20",
