@@ -1,0 +1,17 @@
+<!doctype html>
+<!--
+  Never shown. Capacitor's iOS shell refuses to start unless public/<appStartPath>
+  exists in the bundle (CAPBridgeViewController.loadWebView), even though it then
+  loads https://theping.chat/app over the network. This file is that path. If it
+  were ever opened, it forwards to the live app.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="0; url=https://theping.chat/app">
+<title>Ping</title>
+<style>html,body{margin:0;height:100%;background:#000;color:#9b9ba8;font:15px -apple-system,system-ui,sans-serif;display:grid;place-items:center}</style>
+</head>
+<body><a href="https://theping.chat/app" style="color:#f6f6f8">Open Ping</a></body>
+</html>
