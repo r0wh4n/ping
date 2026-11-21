@@ -11,6 +11,12 @@ overrides:
   # breaks minimatch@3's `require('brace-expansion')(...)` and kills eslint.
   "brace-expansion@<1.1.18": ">=1.1.18 <2"
   "brace-expansion@>=4.0.0 <5.0.9": ">=5.0.9 <6"
+  # three.quarks depends on quarks.core "*"; pin it to the release that
+  # matches three.quarks rather than whatever was published last.
+  quarks.core: "0.17.1"
+  # Pulled in by @react-three/*; held to releases at least two weeks old.
+  n8ao: "2.0.1"
+  "@babel/runtime": "7.29.13"
 
 # Allow native build scripts (prebuilt binaries otherwise skipped).
 allowBuilds:

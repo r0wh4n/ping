@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import SiteNav from "@/components/site/SiteNav";
 
 export const metadata: Metadata = {
   title: "Ping vs Signal — private chat with no phone number | theping.chat",
@@ -83,15 +84,14 @@ export default function VsSignalPage() {
       <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: JSON.stringify(faqLd) }} />
 
       {/* nav */}
-      <nav className="sticky top-0 z-50 border-b border-border bg-[color:var(--bg)]/85 backdrop-blur">
-        <div className="wrap flex items-center justify-between py-4">
-          <Link href="/" className="mono flex items-center gap-2 text-[15px] font-bold tracking-tight">
-            <span className="grid h-6 w-6 place-items-center border border-[color:var(--border-strong)] text-[13px]">◆</span>
-            <span>ping<span className="text-[color:var(--faint)]">.chat</span></span>
-          </Link>
-          <Link href="/app" className="btn">Claim your @name</Link>
-        </div>
-      </nav>
+      <SiteNav
+        links={[
+          { href: "/", label: "Chat app" },
+          { href: "/agents", label: "For agents" },
+        ]}
+        account={{ href: "/app", label: "Log in" }}
+        cta={{ href: "/app", label: "Claim your @name" }}
+      />
 
       {/* hero */}
       <section className="border-b border-border">

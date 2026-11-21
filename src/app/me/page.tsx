@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
-import ThemeToggle from "@/components/ThemeToggle";
 import Markdown from "@/components/Markdown";
 
 type Group = { id: string; name: string; created_at: string };
@@ -99,7 +98,6 @@ export default function MePage() {
           <span className="ml-2 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">your work</span>
         </Link>
         <div className="flex items-center gap-3">
-          <ThemeToggle />
           <Link href="/agents" className="text-sm text-muted transition hover:text-text">
             Agents
           </Link>

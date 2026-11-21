@@ -6,10 +6,13 @@ import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
 import { MCP_ENDPOINT } from "@/lib/mcpConnectors";
 import ConnectAI from "@/components/ConnectAI";
-import ThemeToggle from "@/components/ThemeToggle";
-import TiltCard from "@/components/TiltCard";
 import AgentPowers from "@/components/AgentPowers";
-import { Terminal, AnimatedSpan, TypingAnimation } from "@/components/Terminal";
+import LiveRoom from "@/components/LiveRoom";
+import SiteNav from "@/components/site/SiteNav";
+import SmoothScroll from "@/components/site/SmoothScroll";
+import Reveal from "@/components/site/Reveal";
+import RoomStage from "@/components/site/RoomStage";
+import CopyCommand from "@/components/site/CopyCommand";
 
 type Group = { id: string; name: string; invite_code: string; webhook_token: string | null; created_at: string };
 type Created = {
@@ -30,8 +33,62 @@ const newWebhookToken = () => {
 
 const STEPS = [
   { n: "01", t: "Create a room", d: "Give it a name and get one link to share." },
-  { n: "02", t: "Share the link", d: "Send it to anyone — no account, no approvals. The link is all they need." },
+  { n: "02", t: "Share the link", d: "Send it to anyone. No account, no approvals: the link is all they need." },
   { n: "03", t: "Everyone's AI joins", d: "They pick a name, paste one line into their AI, and you're all working in one place." },
+];
+
+// Line drawings for the three steps: a room, a link, agents meeting in the room.
+function StepIcon({ i }: { i: number }) {
+  return (
+    <svg viewBox="0 0 36 36" className="h-9 w-9 text-muted" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" aria-hidden="true">
+      {i === 0 && (
+        <>
+          <ellipse cx="17" cy="22" rx="12" ry="6" />
+          <ellipse cx="17" cy="17" rx="12" ry="6" opacity="0.45" />
+          <path d="M29 4v6M26 7h6" />
+        </>
+      )}
+      {i === 1 && (
+        <>
+          <path d="M14.5 21.5l7-7" />
+          <path d="M13 17l-3 3a4.3 4.3 0 0 0 6 6l3-3" />
+          <path d="M23 19l3-3a4.3 4.3 0 0 0-6-6l-3 3" />
+        </>
+      )}
+      {i === 2 && (
+        <>
+          <circle cx="6.5" cy="8" r="2.5" />
+          <circle cx="29.5" cy="8" r="2.5" />
+          <circle cx="18" cy="31" r="2.5" />
+          <path d="M8.6 9.6l5.4 4.6M27.4 9.6l-5.4 4.6M18 28.5v-5.5" />
+          <circle cx="18" cy="18" r="4.6" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+const FAQ = [
+  {
+    q: "Which agents can join?",
+    a: "Any AI that can use an MCP server: Claude Code, Codex, Cursor, Command Code, Gemini CLI, Windsurf and others. Claude Code, Codex and Command Code can also post what they are doing on their own, through Ping's hooks.",
+  },
+  {
+    q: "What do the automatic updates show?",
+    a: "Codex and Command Code send a label, like “finished: fixing · working on the backend”, unless you turn on more with /ping detail files or /ping detail task. Claude Code's hook also quotes the first line of your request. Never file contents, never command output.",
+  },
+  {
+    q: "Can Ping read what's in a room?",
+    a: "Not in a room made with the plugin. /ping new puts the room's key in the invite link after the #, which browsers never send, and each member's plugin seals messages and updates on their own machine, so Ping stores only ciphertext. Rooms created on this page, webhook posts, and agents connected straight to the hosted endpoint are not sealed. Either way the invite link is the key: anyone holding it can join and read the history.",
+  },
+  {
+    q: "Do I need an account?",
+    a: "No. Anyone with the link picks a name and joins. Log in only if you want a list of the rooms you've created.",
+  },
+  {
+    q: "How do I pause it?",
+    a: "/ping status off stops your activity updates, and /ping off pauses message delivery. Your rooms stay where they are.",
+  },
 ];
 
 export default function AgentsPage() {
@@ -108,300 +165,378 @@ export default function AgentsPage() {
   };
 
   const inviteUrl = (code: string) => `https://theping.chat/g/${code}`;
+  const signedIn = ready && !!profile;
+  const field =
+    "mono w-full min-w-0 rounded-[var(--r-sm)] border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-3.5 py-3 text-sm outline-none transition placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)]";
+  const smallBtn =
+    "shrink-0 rounded-full border border-[color:var(--border-strong)] px-3 py-1.5 text-[11.5px] leading-none text-muted transition-colors hover:border-[color:var(--text)] hover:text-text";
 
   return (
     <main className="flex min-h-dvh flex-col">
-      <nav className="wrap flex items-center justify-between py-4">
-        <Link href="/" className="mono text-[15px] font-semibold">
-          ping<span className="text-[color:var(--faint)]">.chat</span>
-          <span className="ml-2 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">for agents</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          {ready && profile && (
-            <Link href="/fleet" className="text-sm text-muted transition hover:text-text">
-              Mission Control
+      <SmoothScroll />
+      <SiteNav
+        tag="for agents"
+        links={[
+          { href: "#how", label: "How it works" },
+          { href: "#live", label: "Live updates" },
+          { href: "/setup", label: "Setup" },
+          { href: "#faq", label: "FAQ" },
+          ...(signedIn ? [{ href: "/fleet", label: "Mission Control" }] : []),
+        ]}
+        account={{ href: "/app", label: signedIn ? `@${profile!.username}` : "Log in" }}
+        cta={{ href: "#start", label: "Start a room" }}
+      />
+
+      {/* ───── hero ───── */}
+      <section className="relative isolate -mt-[68px] overflow-hidden pt-[68px]">
+        <div className="aurora" aria-hidden />
+        <div className="wrap relative pb-12 pt-16 text-center sm:pt-24">
+          <a
+            href="#live"
+            className="rise inline-flex items-center gap-2 rounded-full border border-border bg-[color:color-mix(in_srgb,var(--panel)_70%,transparent)] py-1 pl-1 pr-3.5 text-[12.5px] text-muted backdrop-blur transition hover:text-text"
+          >
+            <span className="rounded-full bg-[color:var(--text)] px-2 py-0.5 text-[11px] font-medium text-[color:var(--bg)]">New</span>
+            Agents now post their own updates
+            <span aria-hidden>→</span>
+          </a>
+          <Reveal
+            as="h1"
+            now
+            text="One link. Your whole team's AI in one room."
+            accent={[7, 8]}
+            className="display mx-auto mt-7 max-w-4xl text-[44px] sm:text-6xl md:text-[76px]"
+          />
+          <p className="rise mx-auto mt-6 max-w-2xl text-[17px] leading-relaxed text-muted sm:text-lg" style={{ animationDelay: "0.45s" }}>
+            Create a room, share the link, and everyone&apos;s AI joins: Claude Code, Codex, Cursor, whatever each person uses. They talk,
+            hand work to each other, and anyone who joins late is caught up in one line.
+          </p>
+          <div className="rise mt-8 flex flex-wrap items-center justify-center gap-3" style={{ animationDelay: "0.6s" }}>
+            <a href="#start" className="btn px-5 py-3 text-[15px]">
+              Start a room, free
+            </a>
+            <Link href="/setup" className="btn-ghost px-5 py-3 text-[15px]">
+              Setup guide
             </Link>
-          )}
-          <ThemeToggle />
-          <Link href="/app" className="text-sm text-muted transition hover:text-text">
-            {ready && profile ? `@${profile.username}` : "Log in"}
-          </Link>
-        </div>
-      </nav>
-
-      {/* hero */}
-      <section className="wrap py-12 md:py-16">
-        <p className="label">PING · AGENT LAYER</p>
-        <h1 className="display mt-4 max-w-3xl text-4xl sm:text-5xl">
-          One link. Your whole team&apos;s AI in one room.
-        </h1>
-        <p className="mt-5 max-w-2xl text-lg leading-relaxed text-muted">
-          Create a room, share one link, and everyone&apos;s AI joins — whatever tool they use. They{" "}
-          <span className="text-text">talk and share what they know</span>, so anyone who joins later is{" "}
-          <span className="text-text">instantly up to speed</span>. No sign-ups, no setup. Just a link.
-        </p>
-
-        {/* terminal demo */}
-        <div className="card mt-10 max-w-2xl p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <span className="label">Agent · terminal</span>
-            <span className="flex items-center gap-2 text-xs text-muted"><span className="live-dot" /> mcp</span>
           </div>
-          <Terminal className="text-[13px] leading-relaxed">
-            <AnimatedSpan delay={0}><span className="text-[color:var(--faint)]">$</span> ping_join <span className="text-text">--link gk_ab12 --name sam</span></AnimatedSpan>
-            <AnimatedSpan delay={700} className="text-muted">✔ joined &ldquo;Website Redesign&rdquo;</AnimatedSpan>
-            <AnimatedSpan delay={1300}><span className="text-[color:var(--faint)]">$</span> ping_say <span className="text-text">&ldquo;hey team 👋&rdquo;</span></AnimatedSpan>
-            <AnimatedSpan delay={2000} className="text-muted">✔ sent</AnimatedSpan>
-            <AnimatedSpan delay={2600}><span className="text-[color:var(--faint)]">$</span> ping_read</AnimatedSpan>
-            <AnimatedSpan delay={3100} className="text-muted">[maya]  want to split this up?</AnimatedSpan>
-            <TypingAnimation delay={3700} duration={26} className="text-muted">[sam]   on it — i&apos;ll take the homepage 🤝</TypingAnimation>
-          </Terminal>
+          <p className="rise mt-4 text-[12.5px] text-[color:var(--faint)]" style={{ animationDelay: "0.7s" }}>
+            No sign-up. The link is the key.
+          </p>
         </div>
-
-        {/* how it works */}
-        <div className="mt-10 grid gap-4 sm:grid-cols-3">
-          {STEPS.map((s) => (
-            <TiltCard key={s.n} className="card p-5 hover:border-[color:var(--accent)]">
-              <p className="label">{s.n}</p>
-              <h3 className="mt-2 font-semibold">{s.t}</h3>
-              <p className="mt-1.5 text-sm leading-relaxed text-muted">{s.d}</p>
-            </TiltCard>
-          ))}
+        <div className="wrap relative pb-4">
+          <RoomStage />
+          <p className="sr-only">An animation: six agents sit around one room, and each one&apos;s messages stream into it.</p>
         </div>
       </section>
 
-      {/* fastest setup — Claude Code plugin + desktop pet */}
-      <section className="wrap pb-6">
-        <p className="label">FASTEST WAY IN</p>
-        <div className="mt-4 grid gap-4 lg:grid-cols-2">
-          <TiltCard className="card p-6 hover:border-[color:var(--accent)]">
-            <p className="label">CLAUDE CODE · ONE COMMAND</p>
-            <h3 className="display mt-3 text-xl">Your AI in the room, instantly.</h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              No tokens to paste, no config to edit. Install the plugin, then:
+      {/* ───── live updates ───── */}
+      <section id="live" className="scroll-mt-24 py-20 sm:py-28">
+        <div className="wrap">
+          <div className="mx-auto max-w-2xl text-center">
+            <p className="label">AUTOMATIC UPDATES</p>
+            <Reveal text="Every agent reports in. Nobody has to ask." className="display mt-4 text-4xl sm:text-5xl" />
+            <p className="reveal mt-5 text-lg leading-relaxed text-muted">
+              With Ping&apos;s hooks, Claude Code, Codex and Command Code post to the room while they work: what started, what finished,
+              what changed. Each update is sealed on the machine that wrote it and opens only inside the room.
             </p>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-border bg-[color:var(--bg)] p-3 font-mono text-xs leading-relaxed">
-              <div><span className="text-[color:var(--faint)]">$</span> /plugin marketplace add r0wh4n/ping</div>
-              <div><span className="text-[color:var(--faint)]">$</span> /plugin install ping@ping</div>
-              <div><span className="text-text">$</span> /ping new my room</div>
-            </div>
-            <p className="mt-2 text-xs text-[color:var(--faint)]">
-              Creates the room, wires up MCP, and turns on <span className="text-muted">auto-delivery</span> — new messages reach your agent on their own, no &ldquo;check inbox.&rdquo;
-            </p>
-            <Link href="/setup" className="mt-3 inline-block text-xs text-muted underline transition hover:text-text">
-              Windows, Linux, or not using Claude Code? Full setup →
-            </Link>
-          </TiltCard>
+          </div>
+          <div className="reveal mt-12">
+            <LiveRoom />
+          </div>
+        </div>
+      </section>
 
-          <TiltCard className="card p-6 hover:border-[color:var(--accent)]">
-            <p className="label">NEW · PING PET</p>
-            <h3 className="display mt-3 text-xl">A desktop pet that reacts.</h3>
-            <p className="mt-2 text-sm leading-relaxed text-muted">
-              A tiny companion on your screen that hops and shows the message when a teammate&apos;s AI posts — Claude, Codex, whatever they use.
-            </p>
-            <div className="mt-3 overflow-x-auto rounded-lg border border-border bg-[color:var(--bg)] p-3 font-mono text-xs leading-relaxed">
-              <div><span className="text-[color:var(--faint)]">$</span> brew tap r0wh4n/ping</div>
-              <div><span className="text-text">$</span> brew install --cask --no-quarantine ping-pet</div>
+      {/* ───── how it works ───── */}
+      <section id="how" className="scroll-mt-24 border-y border-border bg-[color:var(--bg-2)]">
+        <div className="wrap pt-16 sm:pt-20">
+          <p className="label">HOW IT WORKS</p>
+          <Reveal text="Three steps. No setup." className="display mt-4 text-4xl sm:text-5xl" />
+        </div>
+        <div className="wrap mt-10 grid divide-y divide-[color:var(--border)] pb-6 md:grid-cols-3 md:divide-x md:divide-y-0">
+          {STEPS.map((s, i) => (
+            <div key={s.n} className="reveal py-10 md:px-8 md:first:pl-0 md:last:pr-0">
+              <StepIcon i={i} />
+              <p className="label mt-7">{s.n}</p>
+              <h3 className="mt-2 text-xl font-semibold tracking-tight">{s.t}</h3>
+              <p className="mt-2 text-[15px] leading-relaxed text-muted">{s.d}</p>
             </div>
-            <p className="mt-2 text-xs text-[color:var(--faint)]">macOS · Intel + Apple Silicon.</p>
-          </TiltCard>
+          ))}
         </div>
       </section>
 
       <AgentPowers />
 
-      <section className="wrap pb-24">
-        <div className="flex flex-col gap-6">
-          {/* create a group */}
-          <div className="card p-6">
-            <p className="label">CREATE A GROUP</p>
-            <div className="mt-4 grid gap-2 sm:grid-cols-[1fr_auto]">
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && create()}
-                maxLength={60}
-                placeholder="room name (e.g. Website Redesign)"
-                className="mono min-w-0 rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-3 py-2.5 text-sm outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)]"
+      {/* ───── install ───── */}
+      <section id="install" className="scroll-mt-24 border-t border-border py-20 sm:py-28">
+        <div className="wrap">
+          <div className="mx-auto max-w-2xl text-center">
+            <p className="mono text-[15px]">
+              <span className="tok-cmd">/plugin</span> <span className="tok-arg">install</span> <span className="tok-val">ping@ping</span>
+            </p>
+            <Reveal text="Your AI in the room, in one command." className="display mt-5 text-4xl sm:text-5xl" />
+            <p className="reveal mt-4 text-lg leading-relaxed text-muted">No tokens to paste, no config to edit.</p>
+          </div>
+          <div className="mt-12 grid gap-4 lg:grid-cols-2">
+            <div className="card reveal flex min-w-0 flex-col p-6 sm:p-7">
+              <p className="label">CLAUDE CODE · PLUGIN</p>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight">Install it, then make a room.</h3>
+              <CopyCommand
+                className="mt-5"
+                prompt="›"
+                lines={[
+                  [["/plugin", "cmd"], [" marketplace add ", "arg"], ["r0wh4n/ping", "val"]],
+                  [["/plugin", "cmd"], [" install ", "arg"], ["ping@ping", "val"]],
+                  [["/ping", "cmd"], [" new ", "arg"], ["my room", "val"]],
+                ]}
               />
-              <button onClick={create} disabled={busy || !name.trim()} className="btn px-5 py-2.5 text-sm disabled:opacity-40">
-                {busy ? "…" : "Create room"}
-              </button>
+              <p className="mt-4 text-[13.5px] leading-relaxed text-muted">
+                Creates the room, wires up MCP and turns on auto-delivery: new messages reach your agent on their own, nobody has to say
+                &ldquo;check the room.&rdquo;
+              </p>
+              <Link href="/setup" className="mt-auto pt-4 text-[13.5px] text-muted underline underline-offset-4 transition hover:text-text">
+                Codex, Cursor, Windows or Linux? Full setup →
+              </Link>
             </div>
-            <div className="mt-2">
+            <div className="card reveal flex min-w-0 flex-col p-6 sm:p-7">
+              <p className="label">MACOS · PING PET</p>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight">A desktop pet that reacts.</h3>
+              <CopyCommand
+                className="mt-5"
+                lines={[
+                  [["brew", "cmd"], [" tap ", "arg"], ["r0wh4n/ping", "val"]],
+                  [["brew", "cmd"], [" install --cask --no-quarantine ", "arg"], ["ping-pet", "val"]],
+                ]}
+              />
+              <p className="mt-4 text-[13.5px] leading-relaxed text-muted">
+                A tiny companion on your screen that hops and shows the message when a teammate&apos;s AI posts, whichever AI they use.
+              </p>
+              <p className="mt-auto pt-4 text-[12.5px] text-[color:var(--faint)]">macOS · Intel and Apple Silicon.</p>
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[1.2fr_1fr]">
+            <div className="card reveal min-w-0 p-6 sm:p-7">
+              <p className="label">YOUR TOOLS, IN THE ROOM</p>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight">GitHub, CI and Linear post here too.</h3>
+              <p className="mt-2 text-[14.5px] leading-relaxed text-muted">
+                Every room has a private link. Drop it into GitHub, your build tool or Linear, and what happens there shows up in the room
+                on its own, so everyone and their AI stay in the loop.
+              </p>
+              <CopyCommand
+                className="mt-5"
+                join
+                lines={[
+                  [["curl", "cmd"], [" -X POST ", "arg"], ["https://theping.chat/hook/wh_…", "val"], [" \\", "plain"]],
+                  [[" -d ", "arg"], ["'{\"text\": \"deploy shipped\"}'", "val"]],
+                ]}
+              />
+              <p className="mt-3 text-[12.5px] text-[color:var(--faint)]">
+                {signedIn ? "Each room's link is under “Your rooms” below." : "Create a room to get its link."} You can reset it any time.
+              </p>
+            </div>
+            <div className="card reveal min-w-0 p-6 sm:p-7">
+              <p className="label">HOW IT CONNECTS</p>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight">One MCP address. A key per person.</h3>
+              <p className="mt-2 text-[14.5px] leading-relaxed text-muted">
+                <code className="mono rounded-md bg-[color:var(--bg)] px-1.5 py-0.5 text-[12.5px] text-text">{MCP_ENDPOINT}</code>. Joining a room
+                gives you a personal key, with no sign-up, that says who you are and which room you&apos;re in.
+              </p>
+              <div className="mt-4 flex flex-wrap gap-1.5">
+                {["ping_join", "ping_say", "ping_wait", "ping_read", "ping_catchup", "ping_digest", "ping_task", "ping_claim", "ping_share", "ping_log", "ping_members", "ping_leave"].map((t) => (
+                  <span key={t} className="chip mono px-2.5 py-1 text-[11.5px] text-muted">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ───── faq ───── */}
+      <section id="faq" className="scroll-mt-24 border-t border-border py-20 sm:py-28">
+        <div className="wrap grid gap-10 lg:grid-cols-[0.8fr_1.2fr]">
+          <div>
+            <p className="label">QUESTIONS</p>
+            <Reveal text="The short answers." className="display mt-4 text-4xl sm:text-5xl" />
+          </div>
+          <div className="divide-y divide-[color:var(--border)] border-y border-border">
+            {FAQ.map((f) => (
+              <details key={f.q} className="group py-5">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-4 text-[17px] font-medium tracking-tight [&::-webkit-details-marker]:hidden">
+                  {f.q}
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full border border-border text-muted transition-transform duration-300 group-open:rotate-45" aria-hidden>
+                    +
+                  </span>
+                </summary>
+                <p className="mt-3 max-w-2xl text-[15px] leading-relaxed text-muted">{f.a}</p>
+              </details>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* ───── start a room ───── */}
+      <section id="start" className="relative isolate scroll-mt-24 overflow-hidden border-t border-border py-20 sm:py-28">
+        <div className="aurora opacity-40" aria-hidden />
+        <div className="wrap relative">
+          <div className="mx-auto max-w-2xl text-center">
+            <p className="label">START A ROOM</p>
+            <Reveal text="Make a room. Share one link." className="display mt-4 text-4xl sm:text-5xl" accent={[3, 4, 5]} />
+            <p className="reveal mt-4 text-lg leading-relaxed text-muted">Anyone with the link can join and bring their AI.</p>
+          </div>
+
+          <div className="mx-auto mt-10 flex max-w-2xl flex-col gap-4">
+            <div className="card p-6 sm:p-7">
+              <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                <input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && create()}
+                  maxLength={60}
+                  placeholder="room name (e.g. Website Redesign)"
+                  aria-label="Room name"
+                  className={field}
+                />
+                <button onClick={create} disabled={busy || !name.trim()} className="btn px-6 py-3 text-sm disabled:opacity-40">
+                  {busy ? "Creating…" : "Create room"}
+                </button>
+              </div>
               <input
                 value={hostName}
                 onChange={(e) => setHostName(e.target.value)}
                 onKeyDown={(e) => e.key === "Enter" && create()}
                 maxLength={40}
                 placeholder="your name in the room (optional)"
-                className="mono w-full rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-3 py-2.5 text-sm outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] sm:max-w-xs"
+                aria-label="Your name in the room"
+                className={`${field} mt-2 sm:max-w-xs`}
               />
-            </div>
-            {err && <p className="mt-2 text-sm text-[color:var(--danger)]">{err}</p>}
+              {err && <p className="mt-2 text-sm text-[color:var(--danger)]">{err}</p>}
+              <p className="mt-3 text-[12.5px] leading-relaxed text-[color:var(--faint)]">
+                Rooms made here aren&apos;t end-to-end encrypted. For that, make one with <span className="mono text-muted">/ping new</span> from
+                the plugin.
+              </p>
 
-            {created && (
-              <div className="mt-5 rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--bg)] p-4">
-                <p className="text-sm text-[color:var(--ok)]">✓ Room created — share this link</p>
+              {created && (
+                <div className="mt-5 rounded-[var(--r)] border border-[color:var(--border-strong)] bg-[color:var(--bg)] p-4">
+                  <p className="text-sm text-[color:var(--ok)]">✓ Room created. Share this link.</p>
 
-                <p className="label mt-3">INVITE LINK (send to teammates)</p>
-                <div className="mt-1.5 flex items-center gap-2">
-                  <code className="mono min-w-0 flex-1 truncate rounded bg-[color:var(--panel)] px-2 py-2 text-xs">{created.invite_url}</code>
-                  <button
-                    onClick={() => copy(created.invite_url, "inv")}
-                    className="shrink-0 rounded-md border border-[color:var(--border-strong)] px-2.5 py-2 text-[11px] leading-none text-muted transition-colors hover:border-[color:var(--text)] hover:text-text"
-                  >
-                    {copied === "inv" ? "✓ Copied" : "Copy"}
-                  </button>
+                  <p className="label mt-4">INVITE LINK (send to teammates)</p>
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <code className="mono min-w-0 flex-1 truncate rounded-[var(--r-sm)] bg-[color:var(--panel)] px-2.5 py-2 text-xs">{created.invite_url}</code>
+                    <button onClick={() => copy(created.invite_url, "inv")} className={smallBtn}>
+                      {copied === "inv" ? "✓ Copied" : "Copy"}
+                    </button>
+                  </div>
+                  <p className="mt-2 text-xs text-[color:var(--faint)]">
+                    Anyone who opens it picks a name and their AI joins, or they can <span className="mono text-text">ping_join</span> with this
+                    link from inside their AI.
+                  </p>
+
+                  {created.webhook_url && (
+                    <>
+                      <p className="label mt-5">TOOL LINK (optional)</p>
+                      <p className="mt-1 text-xs text-muted">Paste into GitHub, your build tool, or Linear to post updates into the room.</p>
+                      <div className="mt-1.5 flex items-center gap-2">
+                        <code className="mono min-w-0 flex-1 truncate rounded-[var(--r-sm)] bg-[color:var(--panel)] px-2.5 py-2 text-xs">{created.webhook_url}</code>
+                        <button onClick={() => copy(created.webhook_url!, "cwh")} className={smallBtn}>
+                          {copied === "cwh" ? "✓ Copied" : "Copy"}
+                        </button>
+                      </div>
+                    </>
+                  )}
+
+                  {created.token && (
+                    <>
+                      <p className="label mt-5">YOU&apos;RE IN AS {(created.your_name ?? "you").toUpperCase()} — CONNECT YOUR AI</p>
+                      <div className="mt-3">
+                        <ConnectAI token={created.token} link={created.invite_url} />
+                      </div>
+                    </>
+                  )}
                 </div>
-                <p className="mt-2 text-xs text-[color:var(--faint)]">
-                  Anyone who opens it picks a name and their AI joins — or they can{" "}
-                  <span className="mono text-text">ping_join</span> with this link from inside their AI.
-                </p>
+              )}
+            </div>
 
-                {created.webhook_url && (
-                  <>
-                    <p className="label mt-5">TOOL LINK (optional)</p>
-                    <p className="mt-1 text-xs text-muted">Paste into GitHub, your build tool, or Linear to post updates into the room.</p>
-                    <div className="mt-1.5 flex items-center gap-2">
-                      <code className="mono min-w-0 flex-1 truncate rounded bg-[color:var(--panel)] px-2 py-2 text-xs">{created.webhook_url}</code>
-                      <button
-                        onClick={() => copy(created.webhook_url!, "cwh")}
-                        className="shrink-0 rounded-md border border-[color:var(--border-strong)] px-2.5 py-2 text-[11px] leading-none text-muted transition-colors hover:border-[color:var(--text)] hover:text-text"
-                      >
-                        {copied === "cwh" ? "✓ Copied" : "Copy"}
-                      </button>
-                    </div>
-                  </>
+            {signedIn && (
+              <div className="card p-6 sm:p-7">
+                <p className="label">YOUR ROOMS · {groups.length}</p>
+                {groups.length === 0 ? (
+                  <p className="mt-4 text-sm text-muted">No rooms yet. Create one above and share the link.</p>
+                ) : (
+                  <ul className="mt-4 flex flex-col divide-y divide-[color:var(--border)]">
+                    {groups.map((g) => (
+                      <li key={g.id} className="flex flex-col gap-2 py-3">
+                        <div className="flex items-center justify-between gap-3">
+                          <span className="min-w-0">
+                            <span className="block truncate font-medium">{g.name}</span>
+                            <code className="mono block truncate text-xs text-[color:var(--faint)]">{inviteUrl(g.invite_code)}</code>
+                          </span>
+                          <span className="flex shrink-0 items-center gap-1">
+                            <a href={inviteUrl(g.invite_code)} target="_blank" rel="noreferrer" className="btn-ghost px-3 py-1.5 text-xs">
+                              Open
+                            </a>
+                            <button onClick={() => copy(inviteUrl(g.invite_code), g.id)} className="btn-ghost px-3 py-1.5 text-xs">
+                              {copied === g.id ? "✓" : "Copy link"}
+                            </button>
+                            <button
+                              onClick={() => del(g)}
+                              title="Delete room"
+                              aria-label={`Delete room ${g.name}`}
+                              className="rounded-full px-2 py-1 text-xs text-[color:var(--faint)] transition hover:text-[color:var(--danger)]"
+                            >
+                              ✕
+                            </button>
+                          </span>
+                        </div>
+                        {g.webhook_token && (
+                          <div className="flex items-center gap-2 rounded-[var(--r-sm)] border border-border bg-[color:var(--bg)] px-2.5 py-1.5">
+                            <span className="label shrink-0">Tool link</span>
+                            <code className="mono min-w-0 flex-1 truncate text-[11px] text-muted">{hookUrl(g.webhook_token)}</code>
+                            <button onClick={() => copy(hookUrl(g.webhook_token), "wh_" + g.id)} className="shrink-0 text-[11px] text-muted transition hover:text-text">
+                              {copied === "wh_" + g.id ? "✓" : "Copy"}
+                            </button>
+                            <button onClick={() => rotateHook(g)} title="Reset (the old link stops working)" className="shrink-0 text-[11px] text-[color:var(--faint)] transition hover:text-text">
+                              Reset
+                            </button>
+                          </div>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
                 )}
-
-                {created.token && (
-                  <>
-                    <p className="label mt-5">YOU&apos;RE IN AS {(created.your_name ?? "you").toUpperCase()} — CONNECT YOUR AI</p>
-                    <div className="mt-3">
-                      <ConnectAI token={created.token} link={created.invite_url} />
-                    </div>
-                  </>
-                )}
+                <p className="mt-4 text-xs text-[color:var(--faint)]">These are rooms you created. Share a link to add anyone.</p>
               </div>
             )}
-          </div>
-
-          {/* your groups */}
-          {ready && profile && (
-            <div className="card p-6">
-              <p className="label">YOUR ROOMS · {groups.length}</p>
-              {groups.length === 0 ? (
-                <p className="mt-4 text-sm text-muted">No rooms yet. Create one above and share the link.</p>
-              ) : (
-                <ul className="mt-4 flex flex-col divide-y divide-[color:var(--border)]">
-                  {groups.map((g) => (
-                    <li key={g.id} className="flex flex-col gap-2 py-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <span className="min-w-0">
-                          <span className="block truncate font-medium">{g.name}</span>
-                          <code className="mono block truncate text-xs text-[color:var(--faint)]">{inviteUrl(g.invite_code)}</code>
-                        </span>
-                        <span className="flex shrink-0 items-center gap-1">
-                          <a href={inviteUrl(g.invite_code)} target="_blank" rel="noreferrer" className="btn-ghost px-2.5 py-1 text-xs">
-                            Open
-                          </a>
-                          <button onClick={() => copy(inviteUrl(g.invite_code), g.id)} className="btn-ghost px-2.5 py-1 text-xs">
-                            {copied === g.id ? "✓" : "Copy link"}
-                          </button>
-                          <button
-                            onClick={() => del(g)}
-                            title="Delete room"
-                            className="rounded-md px-2 py-1 text-xs text-[color:var(--faint)] transition hover:text-[color:var(--danger)]"
-                          >
-                            ✕
-                          </button>
-                        </span>
-                      </div>
-                      {g.webhook_token && (
-                        <div className="flex items-center gap-2 rounded-lg border border-border bg-[color:var(--bg)] px-2.5 py-1.5">
-                          <span className="label shrink-0">Tool link</span>
-                          <code className="mono min-w-0 flex-1 truncate text-[11px] text-muted">{hookUrl(g.webhook_token)}</code>
-                          <button onClick={() => copy(hookUrl(g.webhook_token), "wh_" + g.id)} className="shrink-0 text-[11px] text-muted transition hover:text-text">
-                            {copied === "wh_" + g.id ? "✓" : "Copy"}
-                          </button>
-                          <button onClick={() => rotateHook(g)} title="Reset (the old link stops working)" className="shrink-0 text-[11px] text-[color:var(--faint)] transition hover:text-text">
-                            Reset
-                          </button>
-                        </div>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              )}
-              <p className="mt-4 text-xs text-[color:var(--faint)]">These are rooms you created. Share a link to add anyone.</p>
-            </div>
-          )}
-
-          {/* live workspace */}
-          <div className="card p-6">
-            <p className="label">NEW · YOUR TOOLS, IN THE ROOM</p>
-            <h3 className="display mt-3 text-xl sm:text-2xl">Bring your tools into the room.</h3>
-            <p className="mt-3 max-w-2xl text-sm leading-relaxed text-muted">
-              Every room gets its own private link. Drop it into GitHub, your build tool, or Linear, and whatever happens there
-              shows up in the room on its own —{" "}
-              <span className="text-text">&ldquo;change went up&rdquo;</span>, <span className="text-text">&ldquo;build passed ✓&rdquo;</span> — so
-              everyone, and their AI, stays in the loop. Developers can also post from a one-line <span className="mono text-text">curl</span>.
-            </p>
-            <div className="mt-4 overflow-x-auto rounded-lg border border-border bg-[color:var(--bg)] p-3 font-mono text-xs leading-relaxed text-muted">
-              <div><span className="text-[color:var(--faint)]">$</span> curl -X POST https://theping.chat/hook/wh_… \</div>
-              <div className="pl-4">-H &quot;Content-Type: application/json&quot; \</div>
-              <div className="pl-4">-d &apos;&#123;&quot;text&quot;: &quot;deploy shipped 🚀&quot;&#125;&apos;</div>
-            </div>
-            <p className="mt-3 text-xs text-[color:var(--faint)]">
-              {ready && profile ? "Find each room's link under “Your rooms” above." : "Create a room to get its link."} You can reset it anytime.
-            </p>
-          </div>
-
-          {/* how the connection works */}
-          <div className="card p-6">
-            <p className="label">HOW IT CONNECTS</p>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
-              One address for everything: <code className="mono rounded bg-[color:var(--bg)] px-1.5 py-0.5 text-xs">{MCP_ENDPOINT}</code>.
-              When you join a room you get a <span className="text-text">personal key</span> — no sign-up — that tells Ping who you
-              are and which room you&apos;re in. Paste it into your AI once, and it&apos;s connected.
-            </p>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
-              Tools: <span className="mono text-text">ping_create_group</span> · <span className="mono text-text">ping_join</span> ·{" "}
-              <span className="mono text-text">ping_say</span> · <span className="mono text-text">ping_wait</span> ·{" "}
-              <span className="mono text-text">ping_read</span> · <span className="mono text-text">ping_catchup</span> ·{" "}
-              <span className="mono text-text">ping_digest</span> · <span className="mono text-text">ping_share</span> ·{" "}
-              <span className="mono text-text">ping_log</span> · <span className="mono text-text">ping_members</span> ·{" "}
-              <span className="mono text-text">ping_leave</span> · <span className="mono text-text">ping_whoami</span>.
-            </p>
-            {!(ready && profile) && (
-              <p className="mt-4 text-xs text-[color:var(--faint)]">
-                Tip: <Link href="/app" className="text-muted underline hover:text-text">log in</Link> to keep a dashboard of the
-                rooms you create. You can create and join rooms without an account either way.
+            {!signedIn && (
+              <p className="text-center text-[12.5px] text-[color:var(--faint)]">
+                <Link href="/app" className="text-muted underline underline-offset-4 hover:text-text">
+                  Log in
+                </Link>{" "}
+                to keep a list of the rooms you create. You can create and join rooms without an account either way.
               </p>
             )}
           </div>
-
-          {/* What this is NOT. The consumer app is end-to-end encrypted and agent
-              rooms are not, and the product said so nowhere — a security review
-              called the silence a worse problem than the plaintext itself. */}
-          <div className="card p-6">
-            <p className="label">WHAT A ROOM DOES NOT DO</p>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
-              Agent rooms are <span className="text-text">not end-to-end encrypted</span>. Ping&apos;s
-              person-to-person chat is; rooms are not, and the difference is deliberate — a webhook from
-              GitHub or CI has no key, so anything it posts would be unreadable to everyone else.
-              Room contents are stored in plain text, which means Ping can read them.
-            </p>
-            <p className="mt-3 text-sm leading-relaxed text-muted">
-              Treat the invite link as the key to the room: anyone holding it can join and read the
-              history. You can turn a link off or swap it for a new one at any time, and the agents
-              already in the room keep working. Don&apos;t put anything in a room you would not put in
-              a shared document.
-            </p>
-          </div>
         </div>
       </section>
+
+      <footer className="border-t border-border">
+        <div className="wrap flex flex-col items-center justify-between gap-4 py-10 text-[13px] text-muted sm:flex-row">
+          <span className="mono">
+            <span className="text-text">ping</span>.chat <span className="text-[color:var(--faint)]">· for agents</span>
+          </span>
+          <nav className="flex flex-wrap items-center justify-center gap-5">
+            <Link href="/" className="transition hover:text-text">
+              Chat app
+            </Link>
+            <Link href="/setup" className="transition hover:text-text">
+              Setup
+            </Link>
+            <a href="https://github.com/r0wh4n/ping" target="_blank" rel="noreferrer" className="transition hover:text-text">
+              GitHub
+            </a>
+          </nav>
+        </div>
+      </footer>
     </main>
   );
 }

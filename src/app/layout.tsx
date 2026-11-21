@@ -2,7 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
+// opsz: the same Inter draws as its display cut at headline sizes.
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap", axes: ["opsz"] });
 const jbmono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jbmono", display: "swap" });
 
 const DESC =
@@ -32,15 +33,8 @@ export const metadata: Metadata = {
   },
 };
 
-export const viewport: Viewport = {
-  themeColor: [
-    { media: "(prefers-color-scheme: dark)", color: "#07070f" },
-    { media: "(prefers-color-scheme: light)", color: "#eef0fb" },
-  ],
-};
-
-// Runs before paint so the correct theme is applied with no flash of the wrong one.
-const THEME_SCRIPT = `(function(){try{var t=localStorage.getItem('theme');if(t!=='light'&&t!=='dark'){t=window.matchMedia&&window.matchMedia('(prefers-color-scheme: light)').matches?'light':'dark';}document.documentElement.setAttribute('data-theme',t);}catch(e){document.documentElement.setAttribute('data-theme','dark');}})();`;
+// Ping is black, always: one palette, no theme to pick or to flash on load.
+export const viewport: Viewport = { themeColor: "#000000", colorScheme: "dark" };
 
 export default function RootLayout({
   children,
@@ -53,9 +47,6 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${inter.variable} ${jbmono.variable} antialiased`}
     >
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
-      </head>
       <body className="min-h-dvh flex flex-col">{children}</body>
     </html>
   );

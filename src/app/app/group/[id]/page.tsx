@@ -75,10 +75,10 @@ export default function GroupPage() {
   if (!ready || !profile) return <main className="min-h-dvh" />;
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-        <Link href="/app" className="text-sm text-muted transition hover:text-text">
-          ← Chats
+    <main className="chat-shell mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden">
+      <header className="flex shrink-0 items-center justify-between gap-1 border-b border-border px-2 py-2 sm:px-3">
+        <Link href="/app" aria-label="Back to chats" className="chat-icon-btn w-auto gap-1.5 px-3 text-sm">
+          ← <span className="hidden sm:inline">Chats</span>
         </Link>
         <div className="min-w-0 text-center">
           <div className="truncate text-sm font-semibold">{name || "Group"}</div>
@@ -90,14 +90,14 @@ export default function GroupPage() {
           <button
             onClick={() => setMenuOpen((o) => !o)}
             aria-label="More options"
-            className="px-2 text-lg leading-none text-muted transition hover:text-text"
+            className="chat-icon-btn text-lg leading-none"
           >
             ⋯
           </button>
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-9 z-20 w-40 overflow-hidden rounded-lg border border-border bg-[color:var(--panel)] text-sm shadow-xl">
+              <div className="absolute right-0 top-11 z-20 w-40 overflow-hidden rounded-[var(--r)] border border-border bg-[color:var(--panel)] text-sm shadow-xl">
                 <button
                   onClick={() => {
                     setMenuOpen(false);
@@ -276,12 +276,12 @@ export default function GroupPage() {
           maxLength={2000}
           placeholder={status === "ready" ? `Message ${name}…` : "…"}
           rows={1}
-          className="resize-none mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+          className="min-w-0 flex-1 resize-none rounded-3xl border border-border bg-[color:var(--panel)] px-4 py-2.5 text-[15px] leading-6 outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
         />
         <button
           onClick={onSend}
           disabled={status !== "ready" || !draft.trim()}
-          className="btn shrink-0 px-5 py-3 disabled:cursor-not-allowed disabled:opacity-40"
+          className="btn shrink-0 border-transparent bg-[color:var(--bubble-out-bg)] px-5 py-3 text-[color:var(--bubble-out-fg)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           Send
         </button>

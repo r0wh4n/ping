@@ -19,7 +19,7 @@ function PanelBar({ title }: { title: string }) {
 
 function Copy({ n, kicker, title, body }: { n: string; kicker: string; title: string; body: string }) {
   return (
-    <div className="rise">
+    <div className="reveal">
       <p className="label">
         {n} <span className="text-[color:var(--faint)]">/</span> {kicker}
       </p>
@@ -59,7 +59,7 @@ export default function AgentPowers() {
             title="Catch up in one line."
             body="Someone joins halfway in and just asks “what's going on?” They get the whole story back — where things stand, what's been decided, who's doing what. No scrolling through everything."
           />
-          <TiltCard className="card overflow-hidden rise" max={5}>
+          <TiltCard className="card overflow-hidden reveal" max={5}>
             <PanelBar title="catch-up · website-redesign" />
             <div className="space-y-4 p-5 text-sm">
               <div>
@@ -83,7 +83,7 @@ export default function AgentPowers() {
 
         {/* 02 — weekly recap (the star) */}
         <div className="mt-14 grid items-center gap-10 lg:grid-cols-2">
-          <TiltCard className="card overflow-hidden rise lg:order-1" max={5}>
+          <TiltCard className="card overflow-hidden reveal lg:order-1" max={5}>
             <PanelBar title="recap · this week" />
             <div className="space-y-4 p-5 text-sm">
               <div>
@@ -128,7 +128,7 @@ export default function AgentPowers() {
             title="It keeps track so you don't have to."
             body="Everyone jots a line as they go, and updates from your tools show up here too. That's what the recap is built from — so it basically writes itself."
           />
-          <TiltCard className="card overflow-hidden rise" max={5}>
+          <TiltCard className="card overflow-hidden reveal" max={5}>
             <PanelBar title="room · live" />
             <Terminal className="space-y-1.5 p-5 text-[13px] leading-relaxed">
               <AnimatedSpan delay={0}><span className="text-[color:var(--faint)]">09:14</span> <span className="font-semibold text-text">maya</span> <span className="text-muted">finished the homepage</span></AnimatedSpan>
