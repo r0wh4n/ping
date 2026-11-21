@@ -5,7 +5,6 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "@/lib/supabase";
 import ConnectAI from "@/components/ConnectAI";
-import ThemeToggle from "@/components/ThemeToggle";
 import { useProfile } from "@/hooks/useProfile";
 import { keyFromHash, setRoomKey } from "@/lib/roomKeys";
 
@@ -92,7 +91,6 @@ export default function JoinGroupPage() {
           <span className="ml-2 rounded-full border border-border px-2 py-0.5 text-[11px] text-muted">for agents</span>
         </Link>
         <div className="flex items-center gap-3">
-          <ThemeToggle />
           <Link href="/agents" className="text-sm text-muted transition hover:text-text">
             Create a room →
           </Link>

@@ -55,6 +55,11 @@ const SendIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
   </svg>
 );
 // View-once "snap" — a capture ring, distinct from the plain camera.
+const PlusIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" className={className} aria-hidden="true">
+    <path d="M12 5v14M5 12h14" />
+  </svg>
+);
 const SnapIcon = ({ className = "h-5 w-5" }: { className?: string }) => (
   <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" aria-hidden="true">
     <circle cx="12" cy="12" r="9" />
@@ -98,7 +103,8 @@ export default function DMPage() {
   const call = useCallUI();
 
   const [draft, setDraft] = useState("");
-  const [inputFocused, setInputFocused] = useState(false);
+  // Phone composer: photo, snap and schedule live behind one + so the text box keeps its width.
+  const [trayOpen, setTrayOpen] = useState(false);
   const [activeMsg, setActiveMsg] = useState<string | null>(null);
   const [replyTo, setReplyTo] = useState<DMsg | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -312,26 +318,28 @@ export default function DMPage() {
   if (!ready || !profile) return <main className="min-h-dvh" />;
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden">
+    <main className="chat-shell mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden">
       {/* header */}
-      <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-        <Link href="/app" className="text-sm text-muted transition hover:text-text">
-          ← Friends
+      <header className="flex shrink-0 items-center gap-1 border-b border-border px-2 py-2 sm:px-3">
+        <Link href="/app" aria-label="Back to friends" className="chat-icon-btn w-auto gap-1.5 px-3 text-sm">
+          ← <span className="hidden sm:inline">Friends</span>
         </Link>
-        <div className="flex items-center gap-2 text-sm">
-          {friendActive && <span className="live-dot" />}
-          <span className="mono font-medium">@{handle}</span>
-          <span className="text-xs text-muted">
+        <div className="min-w-0 flex-1 text-center">
+          <div className="flex items-center justify-center gap-1.5 text-[15px]">
+            {friendActive && <span className="live-dot shrink-0" />}
+            <span className="truncate font-medium">@{handle}</span>
+          </div>
+          <div className="truncate text-[11.5px] text-muted">
             {friendTyping ? "typing…" : friendActive ? "active now" : friendStatus || ""}
-          </span>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex shrink-0 items-center">
           <button
             onClick={() => call.start(handle, false)}
             disabled={call.busy}
             title={`Voice call @${handle}`}
             aria-label={`Voice call @${handle}`}
-            className="px-2 text-muted transition hover:text-text disabled:opacity-40"
+            className="chat-icon-btn"
           >
             <PhoneIcon />
           </button>
@@ -340,7 +348,7 @@ export default function DMPage() {
             disabled={call.busy}
             title={`Video call @${handle}`}
             aria-label={`Video call @${handle}`}
-            className="px-2 text-muted transition hover:text-text disabled:opacity-40"
+            className="chat-icon-btn"
           >
             <VideoIcon />
           </button>
@@ -348,7 +356,7 @@ export default function DMPage() {
             href={`/app/live/${handle}`}
             title="Go Live — a zero-trace conversation"
             aria-label="Go Live"
-            className="px-2 text-lg leading-none text-muted transition hover:text-text"
+            className="chat-icon-btn text-lg leading-none"
           >
             ⚡
           </Link>
@@ -356,14 +364,14 @@ export default function DMPage() {
           <button
             onClick={() => setMenuOpen((o) => !o)}
             aria-label="More options"
-            className="px-2 text-lg leading-none text-muted transition hover:text-text"
+            className="chat-icon-btn text-lg leading-none"
           >
             ⋯
           </button>
           {menuOpen && (
             <>
               <div className="fixed inset-0 z-10" onClick={() => setMenuOpen(false)} />
-              <div className="absolute right-0 top-9 z-20 w-52 overflow-hidden rounded-lg border border-border bg-[color:var(--panel)] text-sm shadow-xl">
+              <div className="absolute right-0 top-11 z-20 w-52 overflow-hidden rounded-[var(--r)] border border-border bg-[color:var(--panel)] text-sm shadow-xl">
                 <button
                   onClick={toggleTyping}
                   className="flex w-full items-center justify-between px-4 py-2.5 text-left transition hover:bg-[color:var(--border)]"
@@ -862,6 +870,43 @@ export default function DMPage() {
             className="hidden"
             onChange={onPickSnap}
           />
+          {trayOpen && (
+            <>
+              <div className="fixed inset-0 z-10 sm:hidden" onClick={() => setTrayOpen(false)} />
+              <div className="absolute bottom-full left-3 z-20 mb-2 flex w-60 flex-col overflow-hidden rounded-[var(--r)] border border-border bg-[color:var(--panel)] py-1 text-sm shadow-xl sm:hidden">
+                <button
+                  onClick={() => { setTrayOpen(false); fileRef.current?.click(); }}
+                  disabled={status !== "ready" || uploading}
+                  className="flex items-center gap-3 px-4 py-3 text-left transition hover:bg-[color:var(--border)] disabled:opacity-40"
+                >
+                  <CameraIcon /> Photo or video
+                </button>
+                <button
+                  onClick={() => { setTrayOpen(false); snapRef.current?.click(); }}
+                  disabled={status !== "ready" || uploading}
+                  className="flex items-center gap-3 px-4 py-3 text-left transition hover:bg-[color:var(--border)] disabled:opacity-40"
+                >
+                  <SnapIcon /> View-once snap
+                </button>
+                <button
+                  onClick={() => { setTrayOpen(false); setSchedErr(null); setSchedOpen(true); }}
+                  disabled={status !== "ready" || !draft.trim()}
+                  className="flex items-center gap-3 px-4 py-3 text-left transition hover:bg-[color:var(--border)] disabled:opacity-40"
+                >
+                  <ClockIcon /> Schedule this message
+                </button>
+              </div>
+            </>
+          )}
+          <button
+            onClick={() => setTrayOpen((o) => !o)}
+            disabled={status !== "ready"}
+            aria-label="Attach or schedule"
+            aria-expanded={trayOpen}
+            className="grid h-11 w-11 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:text-text disabled:opacity-40 sm:hidden"
+          >
+            {prep !== null ? <span className="mono text-[11px] tabular-nums">{prep}%</span> : uploading ? "…" : <PlusIcon className={`h-5 w-5 transition-transform ${trayOpen ? "rotate-45" : ""}`} />}
+          </button>
           <button
             onClick={() => {
               setSchedErr(null);
@@ -870,7 +915,7 @@ export default function DMPage() {
             disabled={status !== "ready" || !draft.trim()}
             title="Schedule this message"
             aria-label="Schedule this message"
-            className="grid h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40"
+            className="hidden h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40 sm:grid"
           >
             <ClockIcon />
           </button>
@@ -881,8 +926,7 @@ export default function DMPage() {
             setDraft(e.target.value);
             setTyping(true);
             }}
-            onFocus={() => setInputFocused(true)}
-            onBlur={() => setInputFocused(false)}
+            onFocus={() => setTrayOpen(false)}
             onKeyDown={(e) => {
             if (!sendsMessage({ key: e.key, shiftKey: e.shiftKey, isComposing: e.nativeEvent.isComposing })) return;
             e.preventDefault(); // or Enter also inserts the newline it just sent on
@@ -893,16 +937,16 @@ export default function DMPage() {
             maxLength={2000}
             placeholder={status === "ready" ? "Message @" + handle + "…" : "…"}
             rows={1}
-            className="resize-none mono min-h-[52px] min-w-0 flex-1 rounded-3xl border border-border bg-[color:var(--panel)] px-5 py-4 text-base outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+            className="min-h-[44px] min-w-0 flex-1 resize-none rounded-3xl border border-border bg-[color:var(--panel)] px-4 py-2.5 text-base leading-6 outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50 sm:min-h-[52px] sm:px-5 sm:py-3.5"
           />
-          {/* Camera + voice collapse once the field is focused, leaving just
-              schedule + send. Blur (tap elsewhere) brings them back. */}
+          {/* On a phone: + (photo, snap, schedule), the text box, then the mic until
+              there is something to send, when it becomes send. Wider screens show all. */}
           <button
             onClick={() => fileRef.current?.click()}
             disabled={status !== "ready" || uploading}
             title="Send a photo or video"
             aria-label="Send a photo or video"
-            className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
+            className="hidden h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40 sm:grid"
           >
             {prep !== null ? <span className="mono text-[11px] tabular-nums">{prep}%</span> : uploading ? "…" : <CameraIcon />}
           </button>
@@ -911,7 +955,7 @@ export default function DMPage() {
             disabled={status !== "ready" || uploading}
             title="Record a voice note"
             aria-label="Record a voice note"
-            className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
+            className={`${draft.trim() ? "hidden sm:grid" : "grid"} h-11 w-11 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40 sm:h-12 sm:w-12`}
           >
             <MicIcon />
           </button>
@@ -920,7 +964,7 @@ export default function DMPage() {
             disabled={status !== "ready" || uploading}
             title="Send a view-once snap (photo or video)"
             aria-label="Send a view-once snap"
-            className={`${inputFocused ? "hidden" : "grid"} h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40`}
+            className="hidden h-12 w-12 shrink-0 place-items-center rounded-full border border-border text-muted transition hover:border-[color:var(--accent)] hover:text-text disabled:opacity-40 sm:grid"
           >
             {uploading ? "…" : <SnapIcon />}
           </button>
@@ -929,7 +973,7 @@ export default function DMPage() {
             disabled={status !== "ready" || !draft.trim()}
             title="Send"
             aria-label="Send message"
-            className="grid h-12 w-12 shrink-0 place-items-center rounded-full bg-[color:var(--accent)] text-[color:var(--on-accent)] transition hover:opacity-85 disabled:cursor-not-allowed disabled:opacity-40"
+            className={`${draft.trim() ? "grid" : "hidden sm:grid"} h-11 w-11 shrink-0 place-items-center rounded-full bg-[color:var(--bubble-out-bg)] text-[color:var(--bubble-out-fg)] transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40 sm:h-12 sm:w-12`}
           >
             <SendIcon />
           </button>

@@ -45,16 +45,16 @@ export default function LivePage() {
   const blanked = live && hidden;
 
   return (
-    <main className="mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden">
-      <header className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
-        <Link href={`/app/dm/${handle}`} className="text-sm text-muted transition hover:text-text">
-          ← Chat
+    <main className="chat-shell mx-auto flex h-dvh w-full max-w-2xl flex-col overflow-hidden">
+      <header className="flex shrink-0 items-center justify-between gap-1 border-b border-border px-2 py-2 sm:px-3">
+        <Link href={`/app/dm/${handle}`} aria-label="Back to the chat" className="chat-icon-btn w-auto gap-1.5 px-3 text-sm">
+          ← <span className="hidden sm:inline">Chat</span>
         </Link>
-        <div className="flex items-center gap-2 text-sm">
-          <span className={live ? "live-dot" : "inline-block h-2 w-2 rounded-full bg-[color:var(--faint)]"} />
-          <span className="mono font-medium">⚡ Live · @{handle}</span>
+        <div className="flex min-w-0 items-center gap-2 text-[15px]">
+          <span className={live ? "live-dot shrink-0" : "inline-block h-2 w-2 shrink-0 rounded-full bg-[color:var(--faint)]"} />
+          <span className="truncate font-medium">⚡ Live · @{handle}</span>
         </div>
-        <span className="w-10" />
+        <span className="w-11 shrink-0" />
       </header>
 
       {/* zero-trace banner */}
@@ -134,12 +134,12 @@ export default function LivePage() {
           maxLength={2000}
           placeholder={live ? "say it in the moment…" : "waiting…"}
           rows={1}
-          className="resize-none mono min-w-0 flex-1 rounded-full border border-border bg-[color:var(--panel)] px-4 py-3 text-[15px] outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
+          className="min-w-0 flex-1 resize-none rounded-3xl border border-border bg-[color:var(--panel)] px-4 py-2.5 text-[15px] leading-6 outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)] disabled:opacity-50"
         />
         <button
           onClick={onSend}
           disabled={!live || !draft.trim()}
-          className="btn shrink-0 px-5 py-3 disabled:cursor-not-allowed disabled:opacity-40"
+          className="btn shrink-0 border-transparent bg-[color:var(--bubble-out-bg)] px-5 py-3 text-[color:var(--bubble-out-fg)] disabled:cursor-not-allowed disabled:opacity-40"
         >
           Send
         </button>

@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { MCP_ENDPOINT } from "@/lib/mcpConnectors";
+import SiteNav from "@/components/site/SiteNav";
 
 // Setup, per operating system and per client.
 //
@@ -70,15 +71,14 @@ export default function SetupPage() {
 
   return (
     <main className="min-h-dvh bg-[color:var(--bg)] text-[color:var(--text)]">
-      <nav className="sticky top-0 z-50 border-b border-border bg-[color:var(--bg)]/85 backdrop-blur">
-        <div className="wrap flex items-center justify-between py-4">
-          <Link href="/" className="mono flex items-center gap-2 text-[15px] font-bold tracking-tight">
-            <span className="grid h-6 w-6 place-items-center border border-[color:var(--border-strong)] text-[13px]">◆</span>
-            <span>ping<span className="text-[color:var(--faint)]">.chat</span></span>
-          </Link>
-          <Link href="/agents" className="btn">Create a room</Link>
-        </div>
-      </nav>
+      <SiteNav
+        tag="setup"
+        links={[
+          { href: "/agents", label: "For agents" },
+          { href: "/", label: "Chat app" },
+        ]}
+        cta={{ href: "/agents#start", label: "Create a room" }}
+      />
 
       <section className="border-b border-border">
         <div className="wrap py-14 md:py-20">

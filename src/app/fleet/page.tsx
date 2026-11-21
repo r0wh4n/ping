@@ -395,7 +395,7 @@ export default function FleetPage() {
       <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
           <Link href="/agents" className="mono flex items-center gap-2 text-sm font-bold">
-            <span className="grid h-6 w-6 place-items-center border border-[color:var(--border-strong)] text-[12px]">◆</span>
+            <span className="h-2 w-2 rounded-full bg-[color:var(--brand)] shadow-[0_0_12px_var(--glow)]" aria-hidden />
             <span className="hidden sm:inline">ping<span className="text-[color:var(--faint)]">.chat</span></span>
           </Link>
           <span className="label">Mission Control</span>
