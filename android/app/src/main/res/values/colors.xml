@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Notification accent: off-white, like the rest of Ping. -->
+    <color name="ping_notification">#F6F6F8</color>
+</resources>

@@ -2,6 +2,7 @@
 
 import { useProfile } from "@/hooks/useProfile";
 import { useNotifications } from "@/hooks/useNotifications";
+import { useNativePush } from "@/hooks/useNativePush";
 import { usePresence } from "@/hooks/usePresence";
 import { CallProvider } from "@/components/CallOverlay";
 
@@ -13,6 +14,7 @@ import { CallProvider } from "@/components/CallOverlay";
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   const { profile } = useProfile();
   useNotifications(profile);
+  useNativePush(profile);
   usePresence(profile?.id ?? null);
   return <CallProvider profile={profile}>{children}</CallProvider>;
 }

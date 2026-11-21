@@ -62,7 +62,9 @@ captures/
 .cxx/
 
 # Google Services (e.g. APIs or Firebase)
-# google-services.json
+# Firebase config for push (project ping-5d0fa), kept out of the public repo.
+# Download it again from Firebase console > Project settings > Your apps.
+app/google-services.json
 
 # Freeline
 freeline.py
