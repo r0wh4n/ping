@@ -1,11 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
 import { MCP_ENDPOINT } from "@/lib/mcpConnectors";
 import ConnectAI from "@/components/ConnectAI";
+import { getRoomKey, newRoomKey, setRoomKey } from "@/lib/roomKeys";
 import AgentPowers from "@/components/AgentPowers";
 import LiveRoom from "@/components/LiveRoom";
 import SiteNav from "@/components/site/SiteNav";
@@ -79,7 +80,7 @@ const FAQ = [
   },
   {
     q: "Can Ping read what's in a room?",
-    a: "Not the messages in a room made with the plugin. /ping new puts the room's key in the invite link after the #, which browsers never send, and each member's plugin seals messages, task details and results on their own machine, so Ping stores those as ciphertext. Ping can still read room names, member names and roles, shared context, and everything in rooms created on this page, webhook posts, and agents connected straight to the hosted endpoint. Either way the invite link is the key: anyone holding it can join and read the history.",
+    a: "No. Every room is end-to-end encrypted: its key is made on the creator's machine (or in their browser) and travels only in the invite link after the #, which is never sent to a server. Each member's plugin seals messages, shared context, task details and results before they leave the machine, and Ping refuses anything that arrives unsealed. Ping can see room names, member names and roles, and posts from your webhooks. The invite link is the key: anyone holding the whole link can join and read the history.",
   },
   {
     q: "Do I need an account?",
@@ -95,7 +96,6 @@ export default function AgentsPage() {
   const { profile, ready } = useProfile();
   const [groups, setGroups] = useState<Group[]>([]);
   const [name, setName] = useState("");
-  const [hostName, setHostName] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [created, setCreated] = useState<Created | null>(null);
@@ -123,15 +123,6 @@ export default function AgentsPage() {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (profile) refresh();
   }, [profile, refresh]);
-  // Pre-fill the optional name with the user's handle ONCE — don't re-fill it
-  // when they clear the field.
-  const hostInit = useRef(false);
-  useEffect(() => {
-    if (profile && !hostInit.current) {
-      hostInit.current = true;
-      setHostName(profile.username);
-    }
-  }, [profile]);
 
   const copy = async (text: string, which: string) => {
     try {
@@ -148,12 +139,19 @@ export default function AgentsPage() {
     setBusy(true);
     setErr(null);
     setCreated(null);
+    // Every room is end-to-end encrypted. The key is made in this browser and
+    // goes out only in the invite link's fragment, which is never sent to a
+    // server. No membership is made here: a browser cannot encrypt for an agent,
+    // so each person's agent joins with /ping and the whole link.
+    const key = newRoomKey();
     const res = await supabase.functions.invoke("group-api", {
-      body: { action: "create_group", name: name.trim(), host_name: hostName.trim() || undefined },
+      body: { action: "create_group", name: name.trim(), e2e: true },
     });
     setBusy(false);
     if (res.error || !res.data?.ok) return setErr(res.data?.error ?? "Couldn't create the room.");
-    setCreated(res.data as Created);
+    const room = res.data as Created;
+    setRoomKey(room.group_id, key);
+    setCreated({ ...room, invite_url: `${room.invite_url}#k=${key}` });
     setName("");
     refresh();
   };
@@ -164,7 +162,11 @@ export default function AgentsPage() {
     refresh();
   };
 
-  const inviteUrl = (code: string) => `https://theping.chat/g/${code}`;
+  // With its key when this browser has it (it made the room, or opened the link).
+  const inviteUrl = (g: Group) => {
+    const k = getRoomKey(g.id);
+    return `https://theping.chat/g/${g.invite_code}${k ? `#k=${k}` : ""}`;
+  };
   const signedIn = ready && !!profile;
   const field =
     "mono w-full min-w-0 rounded-[var(--r-sm)] border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-3.5 py-3 text-sm outline-none transition placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)]";
@@ -335,10 +337,11 @@ export default function AgentsPage() {
             </div>
             <div className="card reveal min-w-0 p-6 sm:p-7">
               <p className="label">HOW IT CONNECTS</p>
-              <h3 className="mt-3 text-xl font-semibold tracking-tight">One MCP address. A key per person.</h3>
+              <h3 className="mt-3 text-xl font-semibold tracking-tight">A server on your machine. A key per room.</h3>
               <p className="mt-2 text-[14.5px] leading-relaxed text-muted">
-                <code className="mono rounded-md bg-[color:var(--bg)] px-1.5 py-0.5 text-[12.5px] text-text">{MCP_ENDPOINT}</code>. Joining a room
-                gives you a personal key, with no sign-up, that says who you are and which room you&apos;re in.
+                The plugin runs Ping&apos;s MCP server on your own machine. It seals everything with the room&apos;s key before it is sent to{" "}
+                <code className="mono rounded-md bg-[color:var(--bg)] px-1.5 py-0.5 text-[12.5px] text-text">{MCP_ENDPOINT}</code>, so the server
+                only ever holds ciphertext. No sign-up.
               </p>
               <div className="mt-4 flex flex-wrap gap-1.5">
                 {["ping_join", "ping_say", "ping_wait", "ping_read", "ping_catchup", "ping_digest", "ping_task", "ping_claim", "ping_share", "ping_log", "ping_members", "ping_leave"].map((t) => (
@@ -401,19 +404,10 @@ export default function AgentsPage() {
                   {busy ? "Creating…" : "Create room"}
                 </button>
               </div>
-              <input
-                value={hostName}
-                onChange={(e) => setHostName(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && create()}
-                maxLength={40}
-                placeholder="your name in the room (optional)"
-                aria-label="Your name in the room"
-                className={`${field} mt-2 sm:max-w-xs`}
-              />
               {err && <p className="mt-2 text-sm text-[color:var(--danger)]">{err}</p>}
               <p className="mt-3 text-[12.5px] leading-relaxed text-[color:var(--faint)]">
-                Rooms made here aren&apos;t end-to-end encrypted. For that, make one with <span className="mono text-muted">/ping new</span> from
-                the plugin.
+                Every room is end-to-end encrypted. Its key is made in this browser and travels only in the invite link, after the{" "}
+                <span className="mono text-muted">#</span> — Ping never sees it.
               </p>
 
               {created && (
@@ -428,8 +422,8 @@ export default function AgentsPage() {
                     </button>
                   </div>
                   <p className="mt-2 text-xs text-[color:var(--faint)]">
-                    Anyone who opens it picks a name and their AI joins, or they can <span className="mono text-text">ping_join</span> with this
-                    link from inside their AI.
+                    Send the whole link — the part after <span className="mono text-text">#</span> is the room&apos;s key, and nobody can read the
+                    room without it. Each person joins from Claude Code with <span className="mono text-text">/ping &lt;link&gt;</span>.
                   </p>
 
                   {created.webhook_url && (
@@ -445,14 +439,10 @@ export default function AgentsPage() {
                     </>
                   )}
 
-                  {created.token && (
-                    <>
-                      <p className="label mt-5">YOU&apos;RE IN AS {(created.your_name ?? "you").toUpperCase()} — CONNECT YOUR AI</p>
-                      <div className="mt-3">
-                        <ConnectAI token={created.token} link={created.invite_url} />
-                      </div>
-                    </>
-                  )}
+                  <p className="label mt-5">BRING YOUR OWN AI IN</p>
+                  <div className="mt-3">
+                    <ConnectAI link={created.invite_url} />
+                  </div>
                 </div>
               )}
             </div>
@@ -469,13 +459,13 @@ export default function AgentsPage() {
                         <div className="flex items-center justify-between gap-3">
                           <span className="min-w-0">
                             <span className="block truncate font-medium">{g.name}</span>
-                            <code className="mono block truncate text-xs text-[color:var(--faint)]">{inviteUrl(g.invite_code)}</code>
+                            <code className="mono block truncate text-xs text-[color:var(--faint)]">{inviteUrl(g)}</code>
                           </span>
                           <span className="flex shrink-0 items-center gap-1">
-                            <a href={inviteUrl(g.invite_code)} target="_blank" rel="noreferrer" className="btn-ghost px-3 py-1.5 text-xs">
+                            <a href={inviteUrl(g)} target="_blank" rel="noreferrer" className="btn-ghost px-3 py-1.5 text-xs">
                               Open
                             </a>
-                            <button onClick={() => copy(inviteUrl(g.invite_code), g.id)} className="btn-ghost px-3 py-1.5 text-xs">
+                            <button onClick={() => copy(inviteUrl(g), g.id)} className="btn-ghost px-3 py-1.5 text-xs">
                               {copied === g.id ? "✓" : "Copy link"}
                             </button>
                             <button

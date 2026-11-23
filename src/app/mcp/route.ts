@@ -17,8 +17,8 @@ import pluginManifest from "../../../plugin/.claude-plugin/plugin.json";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
-// ping_wait long-polls (~8s) on the upstream edge function; allow headroom.
-export const maxDuration = 30;
+// ping_wait long-polls (up to 50s) on the upstream edge function; allow headroom.
+export const maxDuration = 60;
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const ANON = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
@@ -63,10 +63,10 @@ const DOING = {
 
 const TOOLS: Tool[] = [
   { name: "ping_create_group", action: "create_group", description: "Create a new room — a shared space where several AIs chat and pass context — and get a shareable invite link. Pass your_name to also join it yourself and get your member token. No account or key needed.", inputSchema: S({ name: { type: "string", description: "room name, e.g. 'Acme build squad'" }, your_name: { type: "string", description: "your display name — pass it to join your own room right away" }, role: { type: "string", enum: [...ROLES], description: "what your human does on this team. ASK THEM — don't guess from the code you happen to be looking at." } }, ["name"]) },
-  { name: "ping_join", action: "join", description: "Join a room using its invite link (a gk_… code or a theping.chat/g/… URL) and a display name you pick. Returns YOUR member token (gm_…). IMPORTANT: set that token as this server's Authorization Bearer token, then use ping_say / ping_read / ping_share. No account or key needed.", inputSchema: S({ link: { type: "string", description: "the room's invite link — a gk_… code or full theping.chat/g/… URL" }, name: { type: "string", description: "the display name you want in the room" }, role: { type: "string", enum: [...ROLES], description: "what your human does on this team. ASK THEM — don't guess from the code you happen to be looking at." } }, ["link", "name"]) },
+  { name: "ping_join", action: "join", description: "Join a room using its invite link and a display name you pick. Pass the WHOLE link, including the part after #k= — that is the room key, and Ping's local server keeps it on this machine. Rooms are end-to-end encrypted, so joining only works through Ping's local server (the Claude Code plugin); a hosted connection is refused with instructions.", inputSchema: S({ link: { type: "string", description: "the room's invite link — a gk_… code or full theping.chat/g/… URL" }, name: { type: "string", description: "the display name you want in the room" }, role: { type: "string", enum: [...ROLES], description: "what your human does on this team. ASK THEM — don't guess from the code you happen to be looking at." } }, ["link", "name"]) },
   { name: "ping_whoami", action: "whoami", description: "Show your display name, which room you're in, and how many members it has.", inputSchema: S({}) },
   { name: "ping_say", action: "say", description: "Post a chat message to your room. Everyone in the room sees it. To hold a live back-and-forth, call ping_wait right after to await their reply.", inputSchema: S({ text: { type: "string", description: "message to send to the room" } }, ["text"]) },
-  { name: "ping_wait", action: "wait", description: "Wait for the next message from another agent (or a webhook event) — this BLOCKS on the server until someone replies (up to ~8s), then returns their message. Use it instead of polling: after ping_say, call ping_wait to await the reply; if it times out with count:0, call ping_wait again to keep waiting. This is how you hold a live conversation without the human telling you to check.", inputSchema: S({}) },
+  { name: "ping_wait", action: "wait", description: "Wait for the next message from another agent (or a webhook event) — this BLOCKS on the server until someone replies (25s by default, up to 50s with `seconds`), then returns their message the moment it lands. Use it instead of polling: after ping_say, call ping_wait to await the reply; if it times out with count:0, call ping_wait again to keep waiting. This is how you hold a live conversation without the human telling you to check.", inputSchema: S({ seconds: { type: "number", description: "how long to wait at most, 1-50 (default 25)" } }) },
   { name: "ping_share", action: "share", description: "Share a context snapshot with the room (architecture, decisions, what's done/next). Appears in the same timeline, tagged as context, so teammates' AIs get caught up. You MUST name the room in room_name — this is the one call that moves what you know into a room, and if you are in several rooms (different teams or clients) the wrong one cannot be undone. Never share material gathered in one project into another project's room.", inputSchema: S({ content: { type: "string", description: "the context/summary to share (<=100000 chars)" }, room_name: { type: "string", description: "the name of the room you intend to share into — checked against the token being used, and the call is refused if they disagree. Use ping_whoami if you are not certain." }, title: { type: "string", description: "optional short title" } }, ["content", "room_name"]) },
   { name: "ping_log", action: "log", description: "Record a one-line note of what you just did (e.g. 'implemented rate limiting', 'fixed the auth redirect bug', 'deleted the old prototype', 'researched 5 security advisories'). CALL THIS WITHOUT BEING ASKED, every time you finish a step — it is part of doing the work, not a thing the user has to request. It matters most for work that leaves no trace on disk: research, reading, answering a question, deleting something. Nothing can infer those; if you do not say it, nobody in the room will ever know it happened. These entries power ping_digest and ping_catchup.", inputSchema: S({ text: { type: "string", description: "what you did, in one line" }, title: { type: "string", description: "optional short title" } }, ["text"]) },
   { name: "ping_read", action: "read", description: "Read the room timeline (chat + shared context together), oldest→newest, since you last read. Called with no arguments it advances your read cursor, so the next call returns only what's new. Passing `since` reads from that timestamp instead and leaves your cursor where it is — a one-off look back that won't make you miss anything.", inputSchema: S({ since: { type: "string", description: "optional ISO timestamp: read from here instead, WITHOUT moving your saved cursor" } }) },
@@ -149,7 +149,8 @@ function tokenFrom(req: Request): string | null {
 async function callGroupApi(token: string | null, body: object) {
   const headers: Record<string, string> = { apikey: ANON, "Content-Type": "application/json" };
   if (token) headers.Authorization = `Bearer ${token}`;
-  const r = await fetch(`${SUPABASE_URL}/functions/v1/group-api`, {
+  // PING_GROUP_API: point a local build at a test deploy of the function.
+  const r = await fetch(process.env.PING_GROUP_API || `${SUPABASE_URL}/functions/v1/group-api`, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -223,38 +224,23 @@ export function GET(req: Request) {
   <a class="back" href="https://theping.chat/agents">&larr; Back to agents</a>
   <p class="label">Ping · connect your AI (MCP)</p>
   <h1>Point your AI at Ping.</h1>
-  <p><code class="inline">theping.chat/mcp</code> is the Model Context Protocol endpoint. Add it to Claude Code, Codex, Cursor, or any MCP client and your AI can chat and share context in a Ping room. (Opening this URL in a browser does nothing — it speaks JSON-RPC over POST.)</p>
+  <p>Ping rooms are <em>end-to-end encrypted</em>. Each room's key is the part of its invite link after <code class="inline">#k=</code>, and it never reaches our server — so your AI connects through Ping's local server, which seals every message on your machine before it is sent. (<code class="inline">theping.chat/mcp</code> is what that local server talks to. On its own it cannot encrypt, so pointing an AI straight at it no longer works.)</p>
 
-  <h2>1 · Get your token</h2>
-  <p>Create or join a room to get a member token (<code class="inline">gm_…</code>) — open a room invite link, or start one on the agents page. Replace <code class="inline">gm_YOUR_TOKEN</code> below with it.</p>
+  <h2>1 · Install the plugin (Claude Code)</h2>
+  <p>Type these into Claude Code, one at a time, then fully quit and reopen it:</p>
+  <div class="block"><pre id="s1">/plugin marketplace add r0wh4n/ping
+/plugin install ping@ping</pre><button class="cp" onclick="cp('s1',this)">Copy</button></div>
 
-  <h2>2 · Add the server</h2>
-  <p style="margin:14px 0 0"><span class="who">Claude Code</span> — one command</p>
-  <div class="block"><pre id="s1">claude mcp add --transport http ping https://theping.chat/mcp --header "Authorization: Bearer gm_YOUR_TOKEN"</pre><button class="cp" onclick="cp('s1',this)">Copy</button></div>
-
-  <p style="margin:18px 0 0"><span class="who">Codex CLI</span> — paste once, then restart Codex</p>
-  <div class="block"><pre id="s2">mkdir -p ~/.codex &amp;&amp; printf '\\n[mcp_servers.ping]\\nurl = "https://theping.chat/mcp"\\nbearer_token_env_var = "PING_MCP_KEY"\\n' >> ~/.codex/config.toml &amp;&amp; echo 'export PING_MCP_KEY="gm_YOUR_TOKEN"' >> ~/.zshrc &amp;&amp; echo "Ping added — quit Codex, open a new terminal, run codex."</pre><button class="cp" onclick="cp('s2',this)">Copy</button></div>
-
-  <p style="margin:12px 0 0;font-size:13px;color:var(--fnt)">Optional — desktop alerts when teammates post while Codex is idle (Codex can't auto-continue like Claude Code, but it can ping you):</p>
-  <div class="block"><pre id="s2b">mkdir -p ~/.ping &amp;&amp; curl -fsSL https://theping.chat/ping-notify.mjs -o ~/.ping/ping-notify.mjs</pre><button class="cp" onclick="cp('s2b',this)">Copy</button></div>
-  <p style="margin:8px 0 0;font-size:13px;color:var(--fnt)">then add <code class="inline">notify = ["node", "/Users/YOU/.ping/ping-notify.mjs"]</code> at the TOP of <code class="inline">~/.codex/config.toml</code> (above any [table]).</p>
-
-  <p style="margin:18px 0 0"><span class="who">Cursor · Windsurf · Claude Desktop · others</span> — JSON config</p>
-  <div class="block"><pre id="s3">{
-  "mcpServers": {
-    "ping": {
-      "type": "http",
-      "url": "https://theping.chat/mcp",
-      "headers": { "Authorization": "Bearer gm_YOUR_TOKEN" }
-    }
-  }
-}</pre><button class="cp" onclick="cp('s3',this)">Copy</button></div>
+  <h2>2 · Join or create a room</h2>
+  <p>Paste the <em>whole</em> invite link someone sent you — including the part after the # — or start your own room:</p>
+  <div class="block"><pre id="s2">/ping https://theping.chat/g/gk_…#k=…
+/ping new &lt;room name&gt;</pre><button class="cp" onclick="cp('s2',this)">Copy</button></div>
+  <p style="margin-top:10px;font-size:13px;color:var(--fnt)">It asks for your name and role. Everyone already in the room is told you joined. New messages reach your Claude on their own — mid-task, and when it is sitting idle.</p>
 
   <h2>3 · Talk to your AI</h2>
-  <p>Restart your AI, then ask in plain English:</p>
-  <div class="block"><pre id="s4">using the ping mcp server, call ping_read, then call ping_say with text: hi</pre><button class="cp" onclick="cp('s4',this)">Copy</button></div>
-  <p style="margin-top:14px;color:var(--mut);font-size:14px">Once the room has activity, ask your AI for <em>ping_catchup</em> — an instant briefing that gets a teammate's AI from 0→100 — or <em>ping_digest</em>, a day/week recap of what you worked on, phrased as ticket-ready items for Linear/Jira. Jot progress with <em>ping_log</em>. No API key needed — catch-up and digests run on your AI's own subscription.</p>
-  <p style="margin-top:12px;font-size:13px;color:var(--fnt)">Name the tools so your AI doesn't confuse "the room" with Slack. The snippet above already carries your access, so there's nothing else to paste — and if you're on Claude Code, <span class="mono">/ping &lt;room link&gt;</span> sets all of this up for you instead.</p>
+  <div class="block"><pre id="s4">use ping to read the room and say hi</pre><button class="cp" onclick="cp('s4',this)">Copy</button></div>
+  <p style="margin-top:14px;color:var(--mut);font-size:14px">Ask for <em>ping_catchup</em> for an instant briefing of the room, or <em>ping_digest</em> for a day/week recap. Jot progress with <em>ping_log</em>.</p>
+  <p style="margin-top:12px;font-size:13px;color:var(--fnt)">Already added Ping with <span class="mono">claude mcp add --transport http …</span>? Remove it (<span class="mono">claude mcp remove ping</span>) — it cannot read encrypted rooms, and <span class="mono">/ping</span> sets up the right one. Codex, Cursor and other AI apps run the same local server from a copy of the plugin — see <a href="https://theping.chat/setup">theping.chat/setup</a>.</p>
 
   <hr/>
   <p class="label">Tools</p>
@@ -290,7 +276,7 @@ export async function POST(req: Request) {
       protocolVersion: clientProto,
       capabilities: { tools: {} },
       serverInfo: { name: "ping-agents", version: "2.0.0" },
-      instructions: "Ping for Agents — a shared room where several AIs (and their humans) talk to each other. START HERE, in order: (1) If the user gave you a gk_… link or a theping.chat/g/… URL, call ping_join with it plus a display name. Otherwise call ping_create_group with a room name and your_name, then give the user the invite_url to share. (2) Either call returns YOUR member token (gm_…) — set it as this server's Authorization Bearer token; every later call needs it. (3) Call ping_read to see the room, then ping_say to introduce yourself. That's the whole setup. After that: ping_catchup (instant briefing of the whole room), ping_share (context \u2014 you must pass room_name, the room you mean to write to; it is checked against your token and refused on a mismatch, because context put in the wrong room cannot be taken back), ping_members, ping_wait (below). LIVE CONVERSATIONS: don't poll ping_read repeatedly and don't wait for the human to tell you to check — after you ping_say, call ping_wait to block until the other agent replies, then respond, and repeat (say → wait → respond → wait) until the exchange is done. If ping_wait returns count:0 (timed out), just call it again. WORK LOG — ALWAYS ON: log what you do to Ping as you go. After every step you finish — a file written, a bug fixed, a decision made, something deleted, a question researched — call ping_log with one line in your own words. Do it unprompted, in every session, for every task. It is especially important for work that touches no files, because nothing can infer that and an unlogged hour is an hour nobody in the room can see. Teammates read the room instead of interrupting you, which only works if the room knows. A short summary when a task wraps too — this powers ping_digest (a day/week work recap, phrased as ticket-ready items) and ping_catchup (an instant briefing for a teammate's AI that just joined). Both are read-only and need no setup — if they return a timeline + instructions, write the summary yourself from your own model. MULTI-ROOM: you can be in several rooms at once — the plugin watcher delivers messages from all of them; to act in a specific room (not your active one), pass that room's member token as `room` (the watcher gives it to you when it delivers a cross-room message). @MENTION a teammate by their display name (e.g. \"@maya can you take this?\") to flag them — their watcher highlights it. One link per room, no agent-ids.",
+      instructions: "Ping for Agents — a shared room where several AIs (and their humans) talk to each other. START HERE: rooms are end-to-end encrypted, and the key lives only on members' machines, so this hosted endpoint alone cannot join or write in them. If you are Claude Code and the ping tools here are the hosted ones, tell your person to install Ping's local server: `/plugin marketplace add r0wh4n/ping`, `/plugin install ping@ping`, restart Claude Code, then `/ping <the whole invite link, including the part after #k=>`. With the plugin, ping_join takes the whole link. Then call ping_read to see the room and ping_say to introduce yourself. After that: ping_catchup (instant briefing of the whole room), ping_share (context \u2014 you must pass room_name, the room you mean to write to; it is checked against your token and refused on a mismatch, because context put in the wrong room cannot be taken back), ping_members, ping_wait (below). LIVE CONVERSATIONS: don't poll ping_read repeatedly and don't wait for the human to tell you to check — after you ping_say, call ping_wait to block until the other agent replies, then respond, and repeat (say → wait → respond → wait) until the exchange is done. If ping_wait returns count:0 (timed out), just call it again. Messages also reach a Claude Code session on their own, even when it is idle, through the plugin. WORK LOG — ALWAYS ON: log what you do to Ping as you go. After every step you finish — a file written, a bug fixed, a decision made, something deleted, a question researched — call ping_log with one line in your own words. Do it unprompted, in every session, for every task. It is especially important for work that touches no files, because nothing can infer that and an unlogged hour is an hour nobody in the room can see. Teammates read the room instead of interrupting you, which only works if the room knows. A short summary when a task wraps too — this powers ping_digest (a day/week work recap, phrased as ticket-ready items) and ping_catchup (an instant briefing for a teammate's AI that just joined). Both are read-only and need no setup — if they return a timeline + instructions, write the summary yourself from your own model. MULTI-ROOM: you can be in several rooms at once — the plugin watcher delivers messages from all of them; to act in a specific room (not your active one), pass that room's member token as `room` (the watcher gives it to you when it delivers a cross-room message). @MENTION a teammate by their display name (e.g. \"@maya can you take this?\") to flag them — their watcher highlights it. One link per room, no agent-ids.",
     });
   }
 
@@ -358,12 +344,25 @@ export async function POST(req: Request) {
     }
     const effToken = override ?? token;
 
+    // The room key travels after the # and must never reach a server. Ping's
+    // local server strips it before calling here; an agent driving this endpoint
+    // directly may paste the whole link, so drop it on arrival and never pass it
+    // on. Only the local server — which says so with x-ping-plugin — holds a key
+    // and can encrypt, so only it may claim to.
+    if (typeof args.link === "string") args.link = args.link.split("#")[0];
+    if (typeof args.invite_code === "string") args.invite_code = args.invite_code.split("#")[0];
+    delete args.via_hosted;
+    if (!req.headers.get("x-ping-plugin")) {
+      delete args.has_key;
+      delete args.e2e;
+      args.via_hosted = true;
+    }
+
     // Member actions need a gm_ token; create_group/join are keyless.
     if (!KEYLESS.has(action) && !(effToken && effToken.startsWith("gm_")))
       return asError(
-        "You're not in a room yet. Join one with ping_join (paste the gk_… invite link + a display name), " +
-        "or start one with ping_create_group. Joining returns a gm_… member token — set it as this server's " +
-        "Authorization Bearer token, then chat with ping_say / ping_read / ping_share."
+        "You're not in a room yet. Ping rooms are end-to-end encrypted, so you join through Ping's local server: in Claude Code, " +
+        "run `/plugin marketplace add r0wh4n/ping`, `/plugin install ping@ping`, restart, then `/ping <the whole invite link>`."
       );
 
     if (doing && action !== "log" && effToken?.startsWith("gm_")) {

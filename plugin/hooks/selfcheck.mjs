@@ -12,7 +12,8 @@ import { classifyTask, isHumanPrompt, cleanPrompt, patchPaths, transcriptPrompt,
 import { mkdtempSync, writeFileSync as writeTmp } from "node:fs";
 import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
-import { newRoomKey, keyFrom, seal, openDeep } from "./ping-crypto.mjs";
+import { newRoomKey, keyFrom, seal, openDeep, sealArgs } from "./ping-crypto.mjs";
+import { interactive } from "./ping-wake.mjs";
 
 // --- @mention -------------------------------------------------------------
 assert.equal(mentionsMe("hey @rohan can you look", "rohan"), true, "plain mention");
@@ -382,5 +383,32 @@ assert.equal(summarize([entry("2026-11-03T11:00:00Z", [{ type: "tool_use", name:
 // It is sent as x-ping-plugin and is the only thing that tells the server an
 // install is stale; a hardcoded copy drifted twice before it was read here.
 assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, not a stale literal");
+
+
+// --- encryption is not optional (0.4.0) ------------------------------------
+{
+  const key = keyFrom(newRoomKey());
+  const shared = sealArgs("ping_share", { content: "the architecture", room_name: "Acme", title: "notes" }, key);
+  assert.match(shared.content, /^ping-e2e:v1:/, "shared context is sealed — it used to go out in plain text");
+  assert.equal(shared.room_name, "Acme", "the room name stays legible for the server's wrong-room check");
+  assert.equal(sealArgs("ping_remove_member", { name: "Siege" }, key).name, "Siege", "a member name stays legible so the server can find it");
+  assert.equal(describeWork(["notes.weird"]), null, "no more 'working on it' when nothing can be said");
+
+  // Lines the agent is shown: joins read as events, and a message this machine
+  // cannot open says why instead of pasting ciphertext.
+  const other = keyFrom(newRoomKey());
+  const room = { token: "gm_x", group: "Acme", name: "me", key: newRoomKey(), last_seen: "2026-01-01T00:00:00Z" };
+  const { blocks } = collectFresh([room], [[
+    { from: "Prateek", mine: false, kind: "event", text: "joined the room (security)", created_at: "2026-01-02T00:00:00Z" },
+    { from: "Prateek", mine: false, kind: "chat", text: seal("hi", other), created_at: "2026-01-02T00:00:01Z" },
+  ]], { active: "Acme" });
+  assert.match(blocks[0], /• Prateek joined the room \(security\)/, "a join is announced as an event");
+  assert.match(blocks[0], /🔒 encrypted, and this machine has no key/, "unopenable messages explain themselves");
+  assert.doesNotMatch(blocks[0], /ping-e2e:/, "no ciphertext reaches the agent");
+
+  // The wake hook must not run where Claude Code would block on it (claude -p).
+  assert.equal(interactive({ CLAUDE_CODE_ENTRYPOINT: "cli" }), true, "an interactive terminal session wakes");
+  assert.equal(interactive({ CLAUDE_CODE_ENTRYPOINT: "sdk-cli", CLAUDE_CODE_SESSION_ATTENDED: "0" }), false, "claude -p never waits on it");
+}
 
 console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);

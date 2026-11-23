@@ -14,6 +14,7 @@ import { supabase } from "@/lib/supabase";
 import { normalizeUsername } from "@/lib/username";
 import Onboarding from "./Onboarding";
 import NewGroup from "./NewGroup";
+import AppTabs from "@/components/AppTabs";
 
 export default function AppHome() {
   const { profile, ready, signUp, logIn, signOut, deleteAccount } = useProfile();
@@ -358,6 +359,7 @@ function SignedInHome({
           </button>
         </div>
       </nav>
+      <AppTabs active="chats" />
 
       <div className="flex flex-col gap-5 px-5 py-7">
         {pushState === "unsupported" ? (

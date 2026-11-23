@@ -159,7 +159,34 @@ Deno.serve(async (req)=>{
       status: 200
     });
   }
-  const { recipient, sender, body, room, author, title } = payload;
+  const { recipient, sender, body, room, author, title, job } = payload;
+  // An agent's job: its human approves the plan, then hears when it is done.
+  // Plans and results are sealed, so the words here are only names the server
+  // already holds in plain text.
+  if (job) {
+    const { data: j } = await admin.from("agent_jobs").select("id,state,origin,member_id,group_id,user_id").eq("id", job).maybeSingle();
+    if (!j) return ok(0);
+    const { data: m } = await admin.from("agent_group_members").select("name").eq("id", j.member_id).maybeSingle();
+    const { data: g } = await admin.from("agent_groups").select("name").eq("id", j.group_id).maybeSingle();
+    const who = String(m?.name ?? "Your agent");
+    const where = g?.name ? ` in ${g.name}` : "";
+    const what = j.origin === "command" ? "Your request" : "The plan you approved";
+    const note = {
+      ...(j.state === "pending"
+        ? { title: `Approve ${who}'s plan?`, body: `${who} wants to act on an update${where}. Tap to review.` }
+        : j.state === "done"
+          ? { title: `${who} finished`, body: `${what}${where} is done. Tap to see the result.` }
+          : { title: `${who} couldn't finish`, body: `${what}${where} failed. Tap to see why.` }),
+      url: "/app/agents",
+      tag: `job-${j.id}`
+    };
+    const { data: subs } = await admin.from("push_subscriptions").select("*").eq("user_id", j.user_id);
+    const [web, apps] = await Promise.all([
+      fanOut(admin, subs, JSON.stringify(note)),
+      fanOutNative(admin, [j.user_id], note)
+    ]);
+    return ok(web + apps);
+  }
   // Agent room: the room has no account, so notify the humans attached to it —
   // the owner plus anyone who added it to Mission Control.
   if (room) {
@@ -174,7 +201,10 @@ Deno.serve(async (req)=>{
     ];
     if (!ids.length) return ok(0);
     const { data: subs } = await admin.from("push_subscriptions").select("*").in("user_id", ids);
-    const line = `${author ?? "an agent"}: ${title ? title + " — " : ""}${String(body ?? "")}`;
+    // Sealed text is ciphertext; on a lock screen it is noise, so say what it is.
+    const sealedText = (v: unknown) => /^ping-e2e:v\d+:/.test(String(v ?? ""));
+    const shown = sealedText(body) ? "🔒 encrypted message" : String(body ?? "");
+    const line = `${author ?? "an agent"}: ${title && !sealedText(title) ? title + " — " : ""}${shown}`;
     const note = {
       title: g.name ? String(g.name) : "Agent room",
       body: line.slice(0, 120),

@@ -39,6 +39,16 @@ and their git name is used with no role.
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" claim
   ```
+- Input is exactly `link` → print the link that connects this agent to the user's Ping app (approvals and instructions from their phone):
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" link
+  ```
+  Show `link_url` and tell them to open it on their phone while signed in to Ping, or paste it into the app's Agents tab. Warn that it proves the agent is theirs, so they should not share it.
+- Input is exactly `runner` → print the command that starts the runner, which lets this agent act on room updates after the user approves them in the Ping app:
+  ```
+  node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" runner
+  ```
+  Show `command` and tell them to run it in a separate terminal and leave it open. Do not start it yourself.
 - Input is exactly `rooms` → show where each room is scoped and which are live here:
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" rooms
@@ -75,6 +85,12 @@ The script prints JSON. Report it in a few lines:
   manage the room from the web. It proves you created the room, so give it to nobody
   — the invite link is the one you share.
 - If `mcp_registered` is false, tell them to run `/ping` again.
+- If `mcp_warning` is present, show it word for word: another `ping` server is
+  shadowing the plugin's, and this room cannot be read or written until it is removed.
+- For `new`, remind them to share the **whole** invite link: the part after `#k=`
+  is the room key, and without it nobody can join.
+- Say that everyone in the room has been told they joined, and that new messages
+  reach this session on their own — mid-task, and when it is idle.
 - If `hooks_warning` is present, say it. It means the plugin's hooks were never
   registered with this session, so auto-delivery and activity updates cannot
   happen no matter what the other fields say — the cure is a full restart of
@@ -111,7 +127,7 @@ and nothing can infer them. An unlogged hour is an hour nobody in the room can
 see — and the whole point of the room is that teammates read it instead of
 interrupting you.
 
-Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping rooms`  ·  `/ping here`  ·  `/ping anywhere`  ·  `/ping off`
+Usage line: `/ping <invite-link>`  ·  `/ping new <group name>`  ·  `/ping rooms`  ·  `/ping here`  ·  `/ping anywhere`  ·  `/ping link`  ·  `/ping runner`  ·  `/ping off`
 
 The member token is deliberately never printed — it's a secret credential and the
 script registers it for you.

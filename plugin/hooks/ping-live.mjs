@@ -13,14 +13,14 @@
 // member's session is doing while it is doing it, not after.
 //
 // PostToolUse fires constantly, so the FIRST thing this does is check a clock
-// in the state file and exit — one small file read — unless a minute has
-// passed. The network is touched at most once a minute per machine.
+// in the state file and exit — one small file read — unless TICK_MS has
+// passed. It was a minute, which made a mid-task conversation a minute behind.
 
 import { pathToFileURL } from "node:url";
 import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
 import { readStdin, pollRoom, postStatus, collectFresh, saveCursors } from "./ping-watch.mjs";
 
-const TICK_MS = 60_000;
+const TICK_MS = 10_000;
 const quiet = () => process.exit(0); // no stdout => nothing injected, tool result untouched
 
 async function main() {

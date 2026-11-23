@@ -207,9 +207,9 @@ async function callRemote(name, args, token) {
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }),
-    // ping_wait blocks server-side for up to ~8s; the rest are quick. This must
+    // ping_wait blocks server-side for up to 50s; the rest are quick. This must
     // stay comfortably above that or a wait would look like a network failure.
-    signal: AbortSignal.timeout(45000),
+    signal: AbortSignal.timeout(75000),
   });
   if (!res.ok) throw new Error(`Ping server returned HTTP ${res.status}.`);
   const body = await res.text();
@@ -318,7 +318,8 @@ async function handleCall(id, params) {
   // and it rides out to teammates in the invite link's fragment.
   if (name === "ping_create_group") {
     const fresh = newRoomKey();
-    const rpc = await callRemote(name, args, null);
+    // e2e: the server only makes rooms for a client that will encrypt them.
+    const rpc = await callRemote(name, { ...args, e2e: true }, null);
     const block = rpc?.result?.content?.find((b) => b.type === "text");
     let data = null;
     try { data = block ? JSON.parse(block.text) : null; } catch { /* leave null */ }
@@ -326,6 +327,9 @@ async function handleCall(id, params) {
       updateState((s) => upsertRoom(s, {
         token: data.token, group: data.group ?? data.name, name: args.your_name,
         key: fresh, path: process.cwd(), last_seen: new Date().toISOString(),
+        // The invite code, so a later ping_join of this same room from this
+        // machine (a subagent, a second session) reuses this membership.
+        ...(data.invite_code ? { code: data.invite_code } : {}),
       }));
       if (data.invite_url) data.invite_url = linkWithKey(data.invite_url, fresh);
       data.encryption = "This room is end-to-end encrypted. The key is in the invite link after the # and never reaches the server — share the whole link, and treat it like a password.";
@@ -364,7 +368,10 @@ async function handleCall(id, params) {
         }, null, 2) }] };
       }
     }
-    args = { ...args, link: link.split("#")[0] };
+    // The key stays here. has_key tells the server this client can encrypt; an
+    // encrypted room refuses a join without it rather than minting a member
+    // that could read and write nothing.
+    args = { ...args, link: link.split("#")[0], has_key: Boolean(joined) };
     const rpc = await callRemote(name, args, null);
     const block = rpc?.result?.content?.find((b) => b.type === "text");
     let data = null;
@@ -381,6 +388,11 @@ async function handleCall(id, params) {
         ? "End-to-end encrypted. Everything you write is sealed on this machine before it is sent."
         : "This link carried no key, so this room is NOT end-to-end encrypted — the server can read it. Ask whoever shared it for the full link, including the part after the #.";
       return { ...rpc.result, content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+    }
+    // Refused because the link lost its key: say that, not the generic advice
+    // to install a plugin this agent is already running.
+    if (data?.e2e && !joined) {
+      return { content: [{ type: "text", text: JSON.stringify({ ok: false, e2e: true, error: "This room is end-to-end encrypted, and the link you used has no key — the part after #k=. Chat apps sometimes cut it off. Ask whoever shared the room for the whole link, then call ping_join with it again." }) }], isError: true };
     }
     return rpc?.result ?? { content: [] };
   }

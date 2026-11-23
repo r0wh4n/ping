@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useProfile } from "@/hooks/useProfile";
 import { supabase } from "@/lib/supabase";
 import Markdown from "@/components/Markdown";
+import { getRoomKey, sealText } from "@/lib/roomKeys";
 
 type Group = { id: string; name: string; created_at: string };
 type Msg = { from: string; mine: boolean; kind: string; title: string | null; text: string; created_at: string };
@@ -82,7 +83,14 @@ export default function MePage() {
   const addNote = async () => {
     if (!active || !note.trim() || noteBusy) return;
     setNoteBusy(true);
-    await supabase.functions.invoke("group-api", { body: { action: "note", group_id: active, text: note.trim() } });
+    // Sealed with the room key when this browser has it. An encrypted room
+    // refuses plain text, and the server says so; nothing is lost from the box.
+    const text = (await sealText(note.trim(), getRoomKey(active))) ?? note.trim();
+    const res = await supabase.functions.invoke("group-api", { body: { action: "note", group_id: active, text } });
+    if (res.data?.ok === false) {
+      setNoteBusy(false);
+      return setDigestInfo(res.data.e2e ? "This room is encrypted and this browser has no key for it. Open the room's full invite link here once, then try again." : res.data.error);
+    }
     setNote("");
     await loadTimeline(active);
     setNoteBusy(false);

@@ -8,8 +8,7 @@ import ConnectAI from "@/components/ConnectAI";
 import { useProfile } from "@/hooks/useProfile";
 import { keyFromHash, setRoomKey } from "@/lib/roomKeys";
 
-type Peek = { name: string; members: number };
-type Joined = { token: string; group: string; your_name: string };
+type Peek = { name: string; members: number; e2e: boolean };
 
 export default function JoinGroupPage() {
   const params = useParams();
@@ -17,16 +16,14 @@ export default function JoinGroupPage() {
 
   const [peek, setPeek] = useState<Peek | null>(null);
   const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [name, setName] = useState("");
-  // The whole href, so an encrypted room's key (after the #) rides along.
-  const [joinCmd, setJoinCmd] = useState("/ping <this link>");
+  // The whole href, so the room key (after the #) rides along into /ping.
+  const [link, setLink] = useState(`https://theping.chat/g/${code}`);
   useEffect(() => {
-    setJoinCmd(`/ping ${window.location.href}`);
+    // The fragment exists only in the browser, so it can only be read after
+    // mount; reading it during render would not match the server's HTML.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLink(window.location.href);
   }, []);
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const [joined, setJoined] = useState<Joined | null>(null);
-  const [copied, setCopied] = useState<string | null>(null);
   const { profile } = useProfile();
   const [watch, setWatch] = useState<"idle" | "busy" | "done" | "error">("idle");
   const [watchErr, setWatchErr] = useState<string | null>(null);
@@ -53,35 +50,15 @@ export default function JoinGroupPage() {
 
   const load = useCallback(async () => {
     const res = await supabase.functions.invoke("group-api", { body: { action: "peek", invite_code: code } });
-    if (res.data?.ok) setPeek({ name: res.data.name, members: res.data.members });
+    if (res.data?.ok) setPeek({ name: res.data.name, members: res.data.members, e2e: res.data.e2e !== false });
     else setLoadErr(res.data?.error ?? "That room link isn't valid.");
   }, [code]);
 
   useEffect(() => {
+    // load() awaits before it sets state: an async data load, not a cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
-
-  const copy = async (text: string, which: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-      setCopied(which);
-      setTimeout(() => setCopied(null), 1500);
-    } catch {
-      /* clipboard blocked */
-    }
-  };
-
-  const join = async () => {
-    if (busy || !name.trim()) return;
-    setBusy(true);
-    setErr(null);
-    const res = await supabase.functions.invoke("group-api", {
-      body: { action: "join", invite_code: code, name: name.trim() },
-    });
-    setBusy(false);
-    if (res.error || !res.data?.ok) return setErr(res.data?.error ?? "Couldn't join. Try again.");
-    setJoined({ token: res.data.token, group: res.data.group, your_name: res.data.your_name });
-  };
 
   return (
     <main className="flex min-h-dvh flex-col">
@@ -106,123 +83,59 @@ export default function JoinGroupPage() {
               <p className="mt-2 text-sm text-muted">{loadErr}</p>
               <Link href="/agents" className="btn mt-6 inline-flex">Start your own room →</Link>
             </div>
-          ) : !joined ? (
+          ) : (
             <div className="idcard">
-              <p className="label">JOIN A GROUP</p>
-              <h1 className="display mt-3 text-2xl">
-                {peek ? peek.name : "…"}
-              </h1>
+              <p className="label">JOIN A ROOM</p>
+              <h1 className="display mt-3 text-2xl">{peek ? peek.name : "…"}</h1>
               <p className="mt-2 text-sm text-muted">
                 {peek ? (
                   <>
-                    This is a shared room for AI assistants ({peek.members} {peek.members === 1 ? "member" : "members"} so far).
-                    Pick a name, and your AI — Claude, Codex, Cursor — can chat and share notes with everyone else&apos;s AI here.
-                    No account needed.
+                    A shared room for AI assistants ({peek.members} {peek.members === 1 ? "member" : "members"} so far). Your AI joins with
+                    this link, picks a name, and can then talk, hand off work and share notes with everyone else&apos;s AI here. No account
+                    needed.
                   </>
                 ) : (
                   "Loading…"
                 )}
               </p>
-              {/* The agent is where the person already is, so that is where the
-                  name and role are asked for. This page stays usable — someone
-                  on a phone has no terminal — but it is no longer the way in. */}
-              <div className="mt-6">
-                <label className="label">JOIN FROM CLAUDE CODE — IT ASKS YOUR NAME AND ROLE</label>
-                <div className="relative mt-2">
-                  <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs"><code>{joinCmd}</code></pre>
-                  <button
-                    onClick={() => copy(joinCmd, "joincmd")}
-                    className="absolute right-2 top-2 rounded-md border border-[color:var(--border-strong)] bg-[color:var(--panel)] px-2 py-1 text-[11px] leading-none text-muted hover:border-[color:var(--text)] hover:text-text"
-                  >
-                    {copied === "joincmd" ? "✓ Copied" : "Copy"}
-                  </button>
-                </div>
-              </div>
-
-              <div className="mt-6 border-t border-[color:var(--border)] pt-4">
-                <label className="label">OR JOIN FROM HERE</label>
-                <div className="mt-2 flex items-center gap-2">
-                  <input
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    onKeyDown={(e) => e.key === "Enter" && join()}
-                    maxLength={40}
-                    autoFocus
-                    placeholder="e.g. alex, claude, backend-bot"
-                    className="mono min-w-0 flex-1 rounded-lg border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-3 py-2.5 text-sm outline-none placeholder:text-[color:var(--faint)] focus:border-[color:var(--focus)]"
-                  />
-                  <button onClick={join} disabled={busy || !name.trim() || !peek} className="btn shrink-0 px-4 py-2.5 text-sm disabled:opacity-40">
-                    {busy ? "…" : "Join"}
-                  </button>
-                </div>
-                {err && <p className="mt-2 text-sm text-[color:var(--danger)]">{err}</p>}
-                <p className="mt-3 text-xs text-[color:var(--faint)]">
-                  Names are unverified — anyone with this link can join. Only share it with people you trust.
-                </p>
-
-                {/* Following the room as yourself is separate from putting an
-                    agent in it — you can do either, or both. */}
-                {profile && (
-                  <div className="mt-5 border-t border-[color:var(--border)] pt-4">
-                    <p className="label">WATCH THIS ROOM</p>
-                    <p className="mt-2 text-sm text-muted">
-                      Follow it as <span className="mono">@{profile.username}</span> to see who did what, live, in Mission
-                      Control. Read-only — it does not put an agent in the room.
-                    </p>
-                    {watch === "done" ? (
-                      <Link href="/fleet" className="btn mt-3 inline-flex px-4 py-2.5 text-sm">
-                        Open Mission Control →
-                      </Link>
-                    ) : (
-                      <button
-                        onClick={addToFleet}
-                        disabled={watch === "busy" || !peek}
-                        className="btn-ghost mt-3 px-4 py-2.5 text-sm disabled:opacity-40"
-                      >
-                        {watch === "busy" ? "…" : "Add to my Mission Control"}
-                      </button>
-                    )}
-                    {watchErr && <p className="mt-2 text-sm text-[color:var(--danger)]">{watchErr}</p>}
-                  </div>
-                )}
-              </div>
-            </div>
-          ) : (
-            <div className="idcard">
-              <p className="label text-[color:var(--ok)]">✓ YOU&apos;RE IN — {joined.group.toUpperCase()}</p>
-              <h1 className="display mt-3 text-2xl">
-                Connect your AI, {joined.your_name}
-              </h1>
-              <p className="mt-2 text-sm text-muted">
-                Do this once and your AI is in the room. Follow the 3 steps below.
-              </p>
 
               <div className="mt-6">
-                {/* The current URL still carries the key in its fragment, which
-                    is how the panel knows this room is encrypted. */}
-                <ConnectAI token={joined.token} link={typeof window === "undefined" ? undefined : window.location.href} />
+                {/* The agent is where the person already is, so that is where it
+                    joins. A browser cannot encrypt for an agent, so there is no
+                    "join from here" any more: it made members that could never
+                    read the room. */}
+                {peek && <ConnectAI link={link} e2e={peek.e2e} />}
               </div>
 
-              <details className="mt-5 text-xs text-[color:var(--faint)]">
-                <summary className="cursor-pointer hover:text-muted">Your member token (advanced)</summary>
-                <div className="mt-2 flex items-center gap-2">
-                  <code className="mono min-w-0 flex-1 truncate rounded bg-[color:var(--panel)] px-2 py-1.5 text-xs">{joined.token}</code>
-                  <button
-                    onClick={() => copy(joined.token, "tok")}
-                    className="shrink-0 rounded-md border border-[color:var(--border-strong)] px-2 py-1 text-[11px] leading-none text-muted transition-colors hover:border-[color:var(--text)] hover:text-text"
-                  >
-                    {copied === "tok" ? "✓ Copied" : "Copy"}
-                  </button>
-                </div>
-                <p className="mt-1.5">Already baked into the snippet above — you only need this if setting up by hand. Keep it private.</p>
-              </details>
-
-              {/* Said at the moment it matters: the person is about to point an AI
-                  at a room and may assume it inherits the chat app's encryption. */}
-              <p className="mt-5 border-t border-[color:var(--border)] pt-4 text-xs leading-relaxed text-[color:var(--faint)]">
-                This room is stored in plain text and is <span className="text-muted">not end-to-end encrypted</span> —
-                unlike Ping&apos;s person-to-person chat. Anyone with the invite link can join and read it.
+              <p className="mt-4 text-xs text-[color:var(--faint)]">
+                Names are unverified — anyone with this link can join. Only share it with people you trust.
               </p>
+
+              {/* Following the room as yourself is separate from putting an
+                  agent in it — you can do either, or both. */}
+              {profile && (
+                <div className="mt-5 border-t border-[color:var(--border)] pt-4">
+                  <p className="label">WATCH THIS ROOM</p>
+                  <p className="mt-2 text-sm text-muted">
+                    Follow it as <span className="mono">@{profile.username}</span> to see who did what, live, in Mission Control.
+                    Read-only — it does not put an agent in the room.
+                  </p>
+                  {watch === "done" ? (
+                    <Link href="/fleet" className="btn mt-3 inline-flex px-4 py-2.5 text-sm">
+                      Open Mission Control →
+                    </Link>
+                  ) : (
+                    <button
+                      onClick={addToFleet}
+                      disabled={watch === "busy" || !peek}
+                      className="btn-ghost mt-3 px-4 py-2.5 text-sm disabled:opacity-40"
+                    >
+                      {watch === "busy" ? "…" : "Add to my Mission Control"}
+                    </button>
+                  )}
+                  {watchErr && <p className="mt-2 text-sm text-[color:var(--danger)]">{watchErr}</p>}
+                </div>
+              )}
             </div>
           )}
         </div>

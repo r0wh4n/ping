@@ -27,8 +27,9 @@ import { summarize } from "./ping-activity.mjs";
 
 const execFileP = promisify(execFile);
 
-const API = "https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1/group-api";
-const ANON =
+// PING_API: point a checkout at a test deploy of the function.
+export const API = process.env.PING_API || "https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1/group-api";
+export const ANON =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzZHNsa3hkb3F3c3BqZm96d3ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5ODg3NjQsImV4cCI6MjEwMDU2NDc2NH0.Kuop6VvV3Ykak8SqH8yBJbt0H6N-mB2-riSVFQS7aDo";
 const FLOOR = "0000-01-01T00:00:00+00:00"; // sorts before any real timestamp
 
@@ -213,9 +214,16 @@ export function collectFresh(rooms, results, state) {
       const tag = mentioned ? " — you were @mentioned" : "";
       // A status post arrives on the same stream as chat, but it is not chat:
       // `[ana] edited useDM.ts` reads like ana typed that sentence at you.
-      const lines = fresh
-        .map((m) => (m.kind === "log" ? `    ⚙ ${m.from} is working on: ${m.text}` : `    [${m.from}] ${m.text}`))
-        .join("\n");
+      const lines = fresh.map((m) => {
+        // Still sealed after opening: this machine has no key for the room, or
+        // the wrong one. Say that, instead of pasting ciphertext at the agent.
+        const text = /^ping-e2e:v\d+:/.test(String(m.text || ""))
+          ? "🔒 encrypted, and this machine has no key for this room. Re-join with the whole invite link (the part after #k= is the key)."
+          : m.text;
+        if (m.kind === "log") return `    ⚙ ${m.from} is working on: ${text}`;
+        if (m.kind === "event") return `    • ${m.from} ${text}`;
+        return `    [${m.from}] ${text}`;
+      }).join("\n");
       blocks.push(`  ${flag}${room.group || "group"}${tag}${hint}:\n${lines}`);
     }
   }

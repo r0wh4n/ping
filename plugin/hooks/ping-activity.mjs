@@ -124,7 +124,9 @@ export function describeCommit(subject, files = []) {
 export function describeWork(files = []) {
   if (!files.length) return null;
   const where = phrase([...new Set(files.map(areaOf).filter(Boolean))]);
-  return `working on ${where ?? "it"}`;
+  // "working on it" says nothing, and it was the most common line in every
+  // room — the same words from every session, every ten minutes.
+  return where ? `working on ${where}` : null;
 }
 
 /** `git status --porcelain` into the paths it names. */

@@ -1,54 +1,33 @@
 "use client";
 
 import { useState } from "react";
-import { connectorsFor, pluginSetup } from "@/lib/mcpConnectors";
+import { pluginSetup } from "@/lib/mcpConnectors";
 
-// The 3-step "connect your AI to the room" panel, written for non-technical
-// people. Shared by the join page (/g/[code]) and the create page (/agents).
-// Bakes in the two things that trip people up:
-//   1) which link goes where — the room link is what got you to this page, and
-//      the snippet already carries your access, so there's nothing more to paste
-//      (this used to read "don't paste the room link into your AI", which flatly
-//      contradicted /ping <link> and ping_join, both of which take the link), and
-//   2) name the tools (ping_read/ping_say) so the AI doesn't guess "Slack group".
+// "Bring your AI into this room", for people who are not sure what MCP is.
+// Shared by the join page (/g/[code]) and the create page (/agents).
+//
+// Every room is end-to-end encrypted, so every AI connects through Ping's local
+// server — the plugin in Claude Code, the same file run by hand elsewhere — and
+// joins with the WHOLE invite link, because the part after the # is the key.
+// The hosted snippets this used to show could not encrypt: an agent set up that
+// way could not read the room, its writes were refused, and from its side the
+// token looked like it "died". So they are gone, not just discouraged.
 //
 // User-facing copy says ROOM throughout. "Group" survives only in table and API
 // names (agent_groups, create_group), which users never see.
 
 const TABS = [
   { id: "cc", label: "Claude Code" },
-  { id: "cx", label: "Codex" },
-  { id: "js", label: "Cursor / others" },
+  { id: "other", label: "Codex · Cursor · others" },
 ];
 
-const RESTART: Record<string, string> = {
-  cc: "Paste in your terminal and press Enter. Then restart Claude Code.",
-  cx: "Paste in Terminal and press Enter. Then fully quit Codex, open a NEW terminal window, and run codex again.",
-  js: "Add this to your app's MCP settings, then fully restart the app.",
-};
-
-const SAY = 'using the ping mcp server, call ping_read, then call ping_say with text: hi';
-
-// `link` is the room's invite link. If it carries a key after the #, this room
-// is end-to-end encrypted and only the plugin's local server can read it — the
-// hosted snippets would show the member ciphertext instead of messages.
-export default function ConnectAI({ token, link }: { token: string; link?: string }) {
+// e2e=false only for an older room made before encryption was required.
+export default function ConnectAI({ link, e2e = true }: { link: string; e2e?: boolean }) {
   const [tab, setTab] = useState("cc");
   const [copied, setCopied] = useState<string | null>(null);
-  const encrypted = Boolean(link && /[#&]k=[A-Za-z0-9_-]+/.test(link));
-  const connectors = connectorsFor(token);
-  const base = connectors.find((c) => c.id === tab) ?? connectors[0];
-  // Claude Code gets the plugin whenever we know the room link, encrypted or
-  // not: it installs and joins in three lines, and `/ping <link>` is the whole
-  // join. The hosted `claude mcp add` is the fallback for a room we have no
-  // link for — and it is never offered for an encrypted room, where it would
-  // register a server under the same name and drop the room to plaintext.
-  const usingPlugin = tab === "cc" && Boolean(link);
-  const joinCmd = `/ping ${link ?? ""}`;
-  const active =
-    base.id === "cc" && link
-      ? { ...base, note: encrypted ? "plugin — keeps the room encrypted" : "plugin — installs and joins", code: pluginSetup(link) }
-      : base;
+  const keyed = /[#&]k=[A-Za-z0-9_-]+/.test(link);
+  const joinCmd = `/ping ${link}`;
+  const otherJoin = `use the ping tools: call ping_join with link ${link}`;
 
   const copy = async (text: string, which: string) => {
     try {
@@ -60,20 +39,23 @@ export default function ConnectAI({ token, link }: { token: string; link?: strin
     }
   };
 
-  const CopyBtn = ({ text, which, tone = "bg" }: { text: string; which: string; tone?: "bg" | "panel" }) => (
-    <button
-      onClick={() => copy(text, which)}
-      className={`absolute right-2 top-2 rounded-md border border-[color:var(--border-strong)] px-2 py-1 text-[11px] leading-none text-muted transition-colors hover:border-[color:var(--text)] hover:text-text ${tone === "panel" ? "bg-[color:var(--panel)]" : "bg-[color:var(--bg)]"}`}
-    >
-      {copied === which ? "✓ Copied" : "Copy"}
-    </button>
+  const block = (text: string, which: string) => (
+    <div className="relative mt-2">
+      <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs leading-relaxed text-text">
+        <code>{text}</code>
+      </pre>
+      <button
+        onClick={() => copy(text, which)}
+        className="absolute right-2 top-2 rounded-md border border-[color:var(--border-strong)] bg-[color:var(--bg)] px-2 py-1 text-[11px] leading-none text-muted transition-colors hover:border-[color:var(--text)] hover:text-text"
+      >
+        {copied === which ? "✓ Copied" : "Copy"}
+      </button>
+    </div>
   );
 
   return (
     <div>
-      {/* Step 1 — pick your AI */}
-      <p className="label">STEP 1 · PICK YOUR AI</p>
-      <div className="mt-2 flex flex-wrap gap-1.5">
+      <div className="flex flex-wrap gap-1.5">
         {TABS.map((t) => (
           <button
             key={t.id}
@@ -88,70 +70,50 @@ export default function ConnectAI({ token, link }: { token: string; link?: strin
           </button>
         ))}
       </div>
-      <p className="mt-2 text-xs text-[color:var(--faint)]">Works with any AI that speaks MCP — these are just the common ones.</p>
 
-      {/* Step 2 — paste once */}
-      <p className="label mt-5">STEP 2 · PASTE THIS ONCE, THEN RESTART</p>
-      <div className="relative mt-2">
-        <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs leading-relaxed"><code>{active.code}</code></pre>
-        <CopyBtn text={active.code} which="snip" />
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        {usingPlugin ? "Type these into Claude Code, one at a time." : RESTART[tab]}
-      </p>
-
-      {/* The join on its own, for anyone who already has the plugin. */}
-      {usingPlugin && (
-        <div className="mt-3">
-          <p className="label">ALREADY HAVE THE PLUGIN? JUST THIS</p>
-          <div className="relative mt-1.5">
-            <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs leading-relaxed text-text"><code>{joinCmd}</code></pre>
-            <CopyBtn text={joinCmd} which="join" />
-          </div>
-        </div>
+      {e2e && !keyed && (
+        <p className="mt-3 rounded-lg border border-[color:var(--danger)] p-3 text-xs leading-relaxed text-muted">
+          <span className="text-text">This link has no key.</span> The part after <span className="mono">#k=</span> is missing — chat
+          apps sometimes cut it off. Ask whoever shared the room for the whole link; without it nobody can read the room.
+        </p>
       )}
 
-      {encrypted && (
-        <div className="mt-3 rounded-lg border border-border bg-[color:var(--panel)] p-3 text-xs leading-relaxed text-muted">
-          {tab === "cc" ? (
-            <>
-              <span className="text-text">This room is end-to-end encrypted.</span> The plugin runs a
-              Ping server on your own machine that seals messages with the room key before they are
-              sent, so the key never leaves your laptop. Don&apos;t also run{" "}
-              <span className="mono">claude mcp add … theping.chat/mcp</span> — it registers a server
-              under the same name and would put this room back into plaintext.
-            </>
-          ) : (
-            <>
-              <span className="text-text">Heads up:</span> this room is end-to-end encrypted, and{" "}
-              {tab === "cx" ? "Codex" : "this client"} has no Ping plugin yet — so it will show sealed
-              messages as <span className="mono">ping-e2e:…</span> rather than text, and anything it
-              writes goes to the server unencrypted. Claude Code can read this room today.
-            </>
-          )}
-        </div>
+      {tab === "cc" ? (
+        <>
+          <p className="label mt-5">FIRST TIME? TYPE THESE INTO CLAUDE CODE, ONE AT A TIME</p>
+          {block(pluginSetup(link), "setup")}
+          <p className="mt-2 text-xs text-muted">
+            After installing, fully quit and reopen Claude Code once, then run the last line. It asks your name and role.
+          </p>
+          <p className="label mt-5">ALREADY HAVE THE PLUGIN? JUST THIS</p>
+          {block(joinCmd, "join")}
+        </>
+      ) : (
+        <>
+          <p className="mt-5 text-xs leading-relaxed text-muted">
+            Codex, Cursor and other AI apps use the same local server as Claude Code — a file from the Ping plugin that runs on your
+            machine and seals every message with the room key. Set it up once by following{" "}
+            <a href="/setup" className="text-text underline underline-offset-4">theping.chat/setup</a> (about two minutes), restart the
+            app, then tell your AI:
+          </p>
+          {block(otherJoin, "other")}
+        </>
       )}
 
-      {/* Step 3 — talk to it */}
-      <p className="label mt-5">STEP 3 · TELL YOUR AI (PLAIN ENGLISH)</p>
-      <div className="relative mt-2">
-        <pre className="mono w-full overflow-x-auto rounded bg-[color:var(--bg)] px-3 py-2.5 pr-16 text-xs leading-relaxed text-text"><code>{SAY}</code></pre>
-        <CopyBtn text={SAY} which="say" />
-      </div>
-      <p className="mt-2 text-xs text-muted">
-        Say the tool names — <span className="mono text-text">ping_read</span> and <span className="mono text-text">ping_say</span> —
-        so your AI doesn&apos;t confuse &ldquo;the room&rdquo; with Slack.
-      </p>
-
-      {/* Which link goes where — the thing people get wrong */}
       <div className="mt-5 rounded-lg border border-[color:var(--border)] bg-[color:var(--panel)] p-3 text-xs leading-relaxed text-muted">
-        <span className="text-text">You&apos;ve already used the room link — that&apos;s how you got here.</span> The snippet
-        above has your access baked in, so there&apos;s nothing else to paste into your AI.
-        {!usingPlugin && (
-          <span className="mt-1.5 block">
-            Using Claude Code? <span className="mono text-text">/ping &lt;room link&gt;</span> does all of this for you instead.
-          </span>
-        )}
+        {e2e ? (
+          <>
+            <span className="text-text">End-to-end encrypted.</span> The room&apos;s key is the part of the link after the{" "}
+            <span className="mono">#</span>. It stays on each member&apos;s machine; Ping only ever stores ciphertext.
+          </>
+        ) : (
+          <>
+            <span className="text-text">An older room, stored in plain text.</span> It was made before encryption was required. Start a new
+            room for anything sensitive — new rooms are always encrypted.
+          </>
+        )}{" "}
+        Everyone in the room is told when you join. Don&apos;t also add <span className="mono">theping.chat/mcp</span> by hand — that
+        connection cannot encrypt.
       </div>
     </div>
   );

@@ -113,10 +113,14 @@ export function openDeep(value, key, depth = 0) {
 
 // The fields that carry what a person wrote. Everything else in a tool call is
 // routing (ids, limits, states) and is no use to anyone reading the database.
-const SECRET_FIELDS = new Set(["text", "title", "detail", "artifact", "result", "body", "name"]);
+// `content` is ping_share's body: it was missing, so shared context — usually
+// the most sensitive thing in a room — went to the server in plain text.
+// `name` is not here: it is a display name (ping_remove_member's argument),
+// and the server has to read it to find the member.
+const SECRET_FIELDS = new Set(["text", "title", "detail", "artifact", "result", "body", "content"]);
 
-// `name` is a display name, not content, and the server needs it legible to
-// attribute messages and match @mentions. Sealing it would break both.
+// Display names stay legible: the server attributes messages and matches
+// @mentions with them.
 const KEEP_CLEAR = new Set(["ping_join", "ping_create_group", "ping_card"]);
 
 export function sealArgs(tool, args, key) {

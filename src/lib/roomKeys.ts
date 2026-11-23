@@ -21,7 +21,19 @@ function unb64u(s: string): Uint8Array {
   return out;
 }
 
+function b64u(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+
 type KeyMap = Record<string, string>;
+
+// A fresh room key, made here so the server never sees it: 32 random bytes,
+// base64url, the same shape the plugin makes.
+export function newRoomKey(): string {
+  return b64u(crypto.getRandomValues(new Uint8Array(32)));
+}
 
 // Every read and write is guarded: localStorage throws in a private window and
 // comes back empty when site data is cleared, and neither should break the page.
@@ -116,4 +128,23 @@ export function keyFromInput(input: string): string | null {
   const m = /(?:^|[#&])k=([A-Za-z0-9_-]+)/.exec(s);
   if (m) return m[1];
   return /^[A-Za-z0-9_-]{43,44}$/.test(s) ? s : null;
+}
+
+// Seal text for a room in the plugin's envelope, so the agent on someone's
+// laptop can read an instruction sent from the app. Null when there is no
+// usable key: the caller must not send the text unsealed instead.
+export async function sealText(text: string, keyB64: string | null): Promise<string | null> {
+  if (!keyB64) return null;
+  try {
+    const raw = unb64u(keyB64);
+    if (raw.length !== 32) return null;
+    const key = await crypto.subtle.importKey("raw", raw as BufferSource, "AES-GCM", false, ["encrypt"]);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const body = new Uint8Array(
+      await crypto.subtle.encrypt({ name: "AES-GCM", iv: iv as BufferSource }, key, new TextEncoder().encode(text) as BufferSource)
+    );
+    return MARKER + b64u(iv) + ":" + b64u(body);
+  } catch {
+    return null;
+  }
 }

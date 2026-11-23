@@ -214,9 +214,10 @@ export default function SetupPage() {
                 </p>
               )}
               <p className="mt-2">
-                For Codex or Cursor, point the same command at their own MCP config instead. The hosted endpoint,{" "}
-                <span className="mono text-text">{MCP_ENDPOINT}</span>, also works directly — but only for rooms
-                that are not end-to-end encrypted.
+                For Codex or Cursor, point the same command at their own MCP config instead, then ask your AI to{" "}
+                <span className="mono text-text">ping_join</span> with the whole invite link. The hosted endpoint,{" "}
+                <span className="mono text-text">{MCP_ENDPOINT}</span>, cannot encrypt, so on its own it only works in
+                older rooms made before encryption was required.
               </p>
             </Step>
 

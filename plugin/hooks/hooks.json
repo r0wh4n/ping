@@ -1,5 +1,5 @@
 {
-  "description": "Delivers new Ping room messages while the agent works, and posts what this session is doing to its active room.",
+  "description": "Delivers new Ping room messages while the agent works and while it sits idle, and posts what this session is doing to its active room.",
   "hooks": {
     "Stop": [
       {
@@ -8,6 +8,12 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-watch.mjs\"",
             "timeout": 15
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-wake.mjs\"",
+            "asyncRewake": true,
+            "timeout": 10800
           }
         ]
       }

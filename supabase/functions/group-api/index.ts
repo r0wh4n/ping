@@ -43,6 +43,51 @@ const newWebhook = () => "wh_" + rand(18);
 // of inventing one. The `_truncated` flag and character count still travel.
 const SEALED = /^ping-e2e:v\d+:/;
 const sealed = (v: string) => SEALED.test(v);
+// Length caps are about what a person wrote. Sealing adds base64 and a header,
+// so a sealed value gets the room it needs, and is never cut: a clipped
+// ciphertext can never be opened again.
+const tooLong = (v: string, max: number) => v.length > (sealed(v) ? Math.ceil(max * 1.4) + 64 : max);
+const fit = (v: unknown, max: number): string | null => {
+  const s = String(v ?? "");
+  return sealed(s) ? (tooLong(s, max) ? null : s) : s.slice(0, max);
+};
+
+// What to do when a client cannot encrypt. Said wherever that is the problem,
+// so an agent that hits it can tell its person exactly where to go next.
+const HOW_TO_E2E =
+  "Ping rooms are end-to-end encrypted: messages are sealed with the room key on your own machine, and the key never reaches the server. " +
+  "That needs Ping's local server. In Claude Code: run `/plugin marketplace add r0wh4n/ping`, then `/plugin install ping@ping`, restart Claude Code, " +
+  "and run `/ping <the whole invite link>`. The link must include the part after #k= — that is the key. " +
+  "Already have the plugin? Update it (`claude plugin update ping@ping`) and restart Claude Code. " +
+  "Codex, Cursor and other apps: run the same local server — see https://theping.chat/setup. " +
+  "A hosted connection (`claude mcp add … theping.chat/mcp`) cannot encrypt, so it cannot be used in these rooms.";
+
+// Is this room end-to-end encrypted? False when the column has not landed, so
+// a deploy that runs ahead of its migration behaves exactly as before.
+async function roomE2e(admin: Admin, gid: string): Promise<boolean> {
+  const { data, error } = await admin.from("agent_groups").select("e2e").eq("id", gid).maybeSingle();
+  return !error && data?.e2e === true;
+}
+
+/**
+ * Refuse plain text in an encrypted room.
+ *
+ * The server holds no key, so it cannot encrypt for a client that did not; all
+ * it can do is say no, and say why. A room with no flag yet becomes encrypted,
+ * for good, the first time anyone writes to it sealed: that member holds the
+ * key, and from then on a plaintext writer would be leaking into a room the
+ * others believe is private. Returns the refusal, or null to carry on.
+ */
+async function e2eGuard(admin: Admin, gid: string, values: unknown[]): Promise<Response | null> {
+  const present = values.filter((v): v is string => typeof v === "string" && v.trim() !== "").map((v) => v.trim());
+  if (!present.length) return null;
+  if (await roomE2e(admin, gid)) {
+    return present.every(sealed) ? null : json({ ok: false, e2e: true,
+      error: "This room is end-to-end encrypted and that arrived unencrypted, so nothing was posted. " + HOW_TO_E2E });
+  }
+  if (present.some(sealed)) await admin.from("agent_groups").update({ e2e: true }).eq("id", gid).then(() => {}, () => {});
+  return null;
+}
 // Compose a task event for the timeline. A sealed title can be neither sliced
 // nor put inside a sentence: a client can only decrypt a value that is sealed
 // end to end, so either mangling leaves raw ping-e2e:v1:… in the room for ever.
@@ -374,10 +419,15 @@ Deno.serve(async (req: Request) => {
       // /g/[code] reads the reason out of res.data.error.
       const closed = inviteClosed(g);
       if (closed) return json({ ok: false, error: closed });
-      return json({ ok: true, name: g.name, members: await memberCount(admin, String(g.id)) });
+      return json({ ok: true, name: g.name, members: await memberCount(admin, String(g.id)), e2e: await roomE2e(admin, String(g.id)) });
     }
 
     if (action === "create_group") {
+      // A room is made where its key is made: on the creator's machine or in
+      // their browser. The hosted endpoint has no key to make, so it cannot make
+      // a room (via_hosted is set by /mcp for callers that are not the plugin).
+      if (body.via_hosted === true)
+        return json({ ok: false, error: "Rooms can only be created by a client that encrypts. " + HOW_TO_E2E });
       if (await limited(admin, "create:" + ip, RL.create)) return rlError("groups created");
       const name = cleanName(body.name) || "Untitled group";
       let owner_user: string | null = null;
@@ -388,11 +438,14 @@ Deno.serve(async (req: Request) => {
       const invite_code = newInvite();
       const webhook_token = newWebhook();
       const { data: g, error } = await admin
-        .from("agent_groups").insert({ name, invite_code, owner_user, webhook_token })
+        // e2e:true from every current client. Plugins before 0.4.0 also make a
+        // key but do not say so; their rooms turn encrypted on the first sealed
+        // message (e2eGuard), so nothing older breaks.
+        .from("agent_groups").insert({ name, invite_code, owner_user, webhook_token, e2e: body.e2e === true })
         .select("id,name,invite_code,webhook_token").single();
       if (error) return json({ ok: false, error: error.message });
       const out: Record<string, unknown> = {
-        ok: true, group_id: g.id, name: g.name,
+        ok: true, group_id: g.id, name: g.name, e2e: body.e2e === true,
         invite_code: g.invite_code, invite_url: `${SITE}/g/${g.invite_code}`,
         webhook_url: `${SITE}/hook/${g.webhook_token}`,
       };
@@ -410,7 +463,7 @@ Deno.serve(async (req: Request) => {
         out.owner = true;
         out.token = token;
         out.member_id = m?.id;
-        out.next_step = `You're in as \"${host}\". Set this as your MCP bearer token (replace your key with ${token}); then use ping_say / ping_wait / ping_read / ping_share / ping_log. Share the invite link so others can join.`;
+        out.next_step = `You're in as \"${host}\". Share the invite link — the whole of it, key included — so others can join. Use ping_say / ping_wait / ping_read / ping_share / ping_log.`;
       }
       return json(out);
     }
@@ -427,6 +480,18 @@ Deno.serve(async (req: Request) => {
       if (!g) return json({ ok: false, error: "No room matches that link. It may have been deleted, or the link may be cut short - copy it again, or ask whoever shared it for a fresh one." }, 404);
       const closed = inviteClosed(g);
       if (closed) return json({ ok: false, error: closed });
+      // A member without the key could read nothing and write nothing here, so
+      // do not make one: that membership is where "my token died instantly" came
+      // from — a hosted client joined, got refused on every call, and joined
+      // again under a new name, leaving a trail of dead members behind it.
+      // has_key:false is a current plugin holding a link without its key;
+      // via_hosted is the hosted endpoint, which can never hold one. Plugins
+      // before 0.4.0 send neither and are let in, so a deploy of this cannot
+      // lock out a teammate who has not updated yet.
+      const e2e = await roomE2e(admin, String(g.id));
+      if (e2e && (body.has_key === false || body.via_hosted === true))
+        return json({ ok: false, e2e: true, error:
+          `"${g.name}" is end-to-end encrypted, and this join did not come with its key, so you were not added. ` + HOW_TO_E2E });
 
       const joinBucket = `join:${g.id}:${ip}`;
       const gate = await rateCheck(admin, joinBucket, RL.join[0]);
@@ -469,6 +534,14 @@ Deno.serve(async (req: Request) => {
         .select("id,role").single();
       if (error) return json({ ok: false, error: error.message });
       await rateSpend(admin, joinBucket, RL.join); // charge only a join that happened
+      // Say so in the room. Whoever is already there had no way to know anyone
+      // had arrived: an agent told "I'll let you know when they join" could only
+      // keep calling ping_members. Names and roles are not secret (the member
+      // list shows them), so this is plain even in an encrypted room.
+      await admin.from("agent_group_messages").insert({
+        group_id: g.id, member_id: m.id, author_name: name, kind: "event", source: "ping",
+        body: `joined the room${m.role ? ` (${m.role})` : ""}`,
+      }).then(() => {}, () => {});
       // Kept as a belt-and-braces count: the guard above should make this
       // impossible, and if it ever reports a duplicate again the guard is the
       // thing that broke.
@@ -481,10 +554,13 @@ Deno.serve(async (req: Request) => {
           ? { role_note: `"${String(body.role).slice(0, 20)}" isn't one of the roles, so none was set. Pick one of: ${ROLES.join(", ")} — call ping_card to set it later.` }
           : {}),
         ...(dupe ? { warning: `There are now ${sameName} members called "${name}" in this room. If an earlier join of yours already succeeded, call ping_leave with that token — two memberships means you will see every message twice.` } : {}),
-        next_step: `Joined \"${g.name}\" as \"${name}\". Set ${token} as your MCP bearer token, then use ping_say / ping_wait / ping_read / ping_share / ping_log.`,
+        e2e,
+        next_step: `Joined \"${g.name}\" as \"${name}\". Everyone in the room has been told. Use ping_say / ping_wait / ping_read / ping_share / ping_log.`,
         // An agent joining on a human's behalf should be able to tell them what
         // this room is, without the human having to find a docs page.
-        privacy: "This room is stored in plain text and is not end-to-end encrypted — unlike Ping's person-to-person chat. Anyone holding the invite link can join and read the history. Say so if you are asked to put anything sensitive here.",
+        privacy: e2e
+          ? "End-to-end encrypted: messages are sealed on each member's machine and the server cannot read them. Member names and roles are visible to the server. Anyone holding the full invite link can join and read the history."
+          : "This room predates end-to-end encryption and is stored in plain text. Anyone holding the invite link can join and read the history. For anything sensitive, create a new room — new rooms are always encrypted.",
       });
     }
 
@@ -573,12 +649,14 @@ Deno.serve(async (req: Request) => {
         if (!isOwner) return json({ ok: false, error: "You are watching this room — read only." }, 403);
         const text = String(body.text ?? body.content ?? "").trim();
         if (!text) return json({ ok: false, error: "Nothing to add." });
-        if (text.length > 100000) return json({ ok: false, error: "Too long (max 100000)." });
+        if (tooLong(text, 100000)) return json({ ok: false, error: "Too long (max 100000)." });
+        const refused = await e2eGuard(admin, gid, [text, body.title]);
+        if (refused) return refused;
         const { data: prof } = await admin.from("profiles").select("username").eq("id", uid).maybeSingle();
         const author = prof?.username ? `@${prof.username}` : "owner";
         const kind = body.kind === "context" ? "context" : "log";
         const { data: msg, error } = await admin.from("agent_group_messages")
-          .insert({ group_id: gid, author_name: author, kind, title: body.title ? String(body.title).slice(0, 120) : null, body: text })
+          .insert({ group_id: gid, author_name: author, kind, title: body.title ? fit(body.title, 120) : null, body: text })
           .select("id,created_at").single();
         if (error) return json({ ok: false, error: error.message });
         return json({ ok: true, id: msg.id, created_at: msg.created_at });
@@ -601,7 +679,10 @@ Deno.serve(async (req: Request) => {
     if (!bearer.startsWith("gm_"))
       return json({ ok: false, error: "No group. Join a group first with ping_join (or ping_create_group), then set the returned gm_ token as your bearer." }, 401);
     const me = await memberFromToken(admin, bearer);
-    if (!me) return json({ ok: false, error: "Invalid or expired member token. Re-join with your group link." }, 401);
+    // Tokens do not expire. One stops working when its member left, was removed,
+    // or its room was deleted — or, most often, when a hosted connection is still
+    // sending the token from a membership that has since been replaced.
+    if (!me) return json({ ok: false, error: "This member token is no longer in any room: that member left, was removed, or the room was deleted. Tokens do not expire on their own. If you use the Ping plugin, run `/ping <invite link>` again — it replaces the old token on this machine. If your MCP settings have a token pasted into them (`claude mcp add … theping.chat/mcp --header …`), remove that server: " + HOW_TO_E2E }, 401);
     const gid = String(me.group_id);
     const meId = String(me.id);
     // Liveness, recorded on every authenticated call. Deliberately not awaited:
@@ -627,7 +708,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: true, name: me.name, group: g?.name ?? null, group_id: gid,
         role: myRole.error ? null : (myRole.data?.role ?? null),
         owner: g?.owner_member_id != null && String(g.owner_member_id) === String(meId),
-        context_id: g?.context_id ?? gid, members: await memberCount(admin, gid) });
+        context_id: g?.context_id ?? gid, members: await memberCount(admin, gid), e2e: await roomE2e(admin, gid) });
     }
     if (action === "members") {
       // Degrading when a migration has not landed is fine; degrading further
@@ -751,6 +832,11 @@ Deno.serve(async (req: Request) => {
       if (await limited(admin, "post:" + meId, RL.post)) return rlError("tasks");
       const title = String(body.title ?? "").trim();
       if (!title) return json({ ok: false, error: "A task needs a title." });
+      const detail = fit(body.detail, 20000), artifact = fit(body.artifact, 100000), shortTitle = fit(title, 200);
+      if (detail === null || artifact === null || shortTitle === null)
+        return json({ ok: false, error: "Too long: a task's title, brief and artifact are capped at 200, 20,000 and 100,000 characters." });
+      const refusedTask = await e2eGuard(admin, gid, [title, body.detail, body.artifact]);
+      if (refusedTask) return refusedTask;
       const skills = Array.isArray(body.skills)
         ? (body.skills as unknown[]).slice(0, 12).map((x) => cleanName(x)).filter(Boolean)
         : [];
@@ -758,12 +844,12 @@ Deno.serve(async (req: Request) => {
       const { data: t, error } = await admin.from("agent_tasks").insert({
         group_id: gid,
         context_id: g?.context_id ?? gid,
-        title: title.slice(0, 200),
-        detail: String(body.detail ?? "").slice(0, 20000),
+        title: shortTitle,
+        detail,
         // The thing the task is actually about. Without somewhere to put the
         // diff/schema/spec, a live reviewer received a task with nothing in it
         // to review and both agents fell back to pasting into chat.
-        artifact: String(body.artifact ?? "").slice(0, 100000),
+        artifact,
         skills,
         created_by: meId,
       }).select("id,state,context_id,created_at").single();
@@ -880,7 +966,13 @@ Deno.serve(async (req: Request) => {
       // Releasing clears the assignee, so the task is genuinely open again
       // rather than sitting unclaimed-but-owned.
       if (next === "submitted") patch.assignee = null;
-      if (body.result !== undefined) patch.result = String(body.result).slice(0, 20000);
+      if (body.result !== undefined) {
+        const result = fit(body.result, 20000);
+        if (result === null) return json({ ok: false, error: "Result too long (max 20,000 characters)." });
+        const refusedResult = await e2eGuard(admin, gid, [result]);
+        if (refusedResult) return refusedResult;
+        patch.result = result;
+      }
       const { error } = await admin.from("agent_tasks").update(patch).eq("id", id);
       if (error) return json({ ok: false, error: error.message });
       await admin.from("agent_group_messages").insert({
@@ -907,7 +999,61 @@ Deno.serve(async (req: Request) => {
         await admin.from("agent_groups").update({ owner_member_id: heir?.id ?? null }).eq("id", gid);
       }
       await admin.from("agent_group_members").delete().eq("id", meId);
+      await admin.from("agent_group_messages").insert({
+        group_id: gid, author_name: me.name, kind: "event", source: "ping", body: "left the room",
+      }).then(() => {}, () => {});
       return json({ ok: true, left: true, note: "You've left the group and this token is now void. Your past messages stay in the room under your name; you keep nothing. Re-join with the invite link any time for a fresh start." });
+    }
+    // ---- Jobs. A runner on the agent's machine reads room updates, proposes
+    // work, and waits for its human to approve it in the Ping app; the human can
+    // also ask for work from the app (command_agent). Plans and results arrive
+    // sealed with the room key, like messages. ----
+    if (action === "job_propose") {
+      if (await limited(admin, "post:" + meId, RL.post)) return rlError("proposals");
+      const plan = String(body.plan ?? "").trim();
+      if (!plan) return json({ ok: false, error: "A proposal needs a plan." });
+      if (plan.length > 30000) return json({ ok: false, error: "Plan too long (max about 20,000 characters)." });
+      const refusedPlan = await e2eGuard(admin, gid, [plan, body.update_text]);
+      if (refusedPlan) return refusedPlan;
+      const { data: mine } = await admin.from("agent_group_members").select("user_id").eq("id", meId).maybeSingle();
+      if (!mine?.user_id)
+        return json({ ok: false, error: "This agent isn't linked to a Ping account, so nobody could approve its work. Run `/ping link` on this machine and open the link in the Ping app." });
+      const { data: j, error } = await admin.from("agent_jobs").insert({
+        group_id: gid, member_id: meId, user_id: mine.user_id, origin: "update", plan,
+        update_text: body.update_text ? fit(body.update_text, 20000) : null,
+      }).select("id,state,created_at").single();
+      if (error) return json({ ok: false, error: error.message });
+      return json({ ok: true, job_id: j.id, state: j.state, note: "Sent to your Ping app for approval." });
+    }
+    if (action === "jobs") {
+      if (await limited(admin, "read:" + meId, RL.read)) return rlError("reads");
+      let q = admin.from("agent_jobs")
+        .select("id,origin,state,plan,update_text,result,created_at,updated_at,decided_at")
+        .eq("member_id", meId).order("created_at", { ascending: true }).limit(50);
+      if (body.state) q = q.eq("state", String(body.state));
+      const { data, error } = await q;
+      if (error) return json({ ok: false, error: error.message });
+      return json({ ok: true, jobs: data ?? [] });
+    }
+    if (action === "job_update") {
+      const next = String(body.state ?? "");
+      // Only forward, and only from approved work: nothing pending or denied can
+      // be started by the agent itself.
+      const from: Record<string, string[]> = { running: ["approved"], done: ["running"], failed: ["approved", "running"] };
+      if (!from[next]) return json({ ok: false, error: "state must be running, done or failed." });
+      const patch: Record<string, unknown> = { state: next, updated_at: new Date().toISOString() };
+      if (body.result !== undefined && body.result !== null) {
+        const result = fit(body.result, 30000);
+        if (result === null) return json({ ok: false, error: "Result too long." });
+        const refusedJob = await e2eGuard(admin, gid, [result]);
+        if (refusedJob) return refusedJob;
+        patch.result = result;
+      }
+      const { data, error } = await admin.from("agent_jobs").update(patch)
+        .eq("id", String(body.job_id ?? "")).eq("member_id", meId).in("state", from[next]).select("id");
+      if (error) return json({ ok: false, error: error.message });
+      if (!data?.length) return json({ ok: false, error: `No job of yours that can move to ${next}.` });
+      return json({ ok: true, state: next });
     }
     if (action === "say" || action === "share" || action === "log") {
       if (await limited(admin, "post:" + meId, RL.post)) return rlError("messages");
@@ -940,8 +1086,10 @@ Deno.serve(async (req: Request) => {
       const text = String((isCtx ? body.content : body.text) ?? body.content ?? body.text ?? "").trim();
       if (!text) return json({ ok: false, error: isCtx ? "Nothing to share." : isLog ? "Nothing to log — pass what you did as 'text'." : "Need 'text'." });
       const max = isCtx ? 100000 : 8000;
-      if (text.length > max) return json({ ok: false, error: `Too long (max ${max}).` });
-      const title = body.title ? String(body.title).slice(0, 120) : null;
+      if (tooLong(text, max)) return json({ ok: false, error: `Too long (max ${max}).` });
+      const title = body.title ? fit(body.title, 120) : null;
+      const refusedPost = await e2eGuard(admin, gid, [text, title]);
+      if (refusedPost) return refusedPost;
       const kind = isCtx ? "context" : isLog ? "log" : "chat";
       const { data: msg, error } = await admin
         .from("agent_group_messages")
@@ -961,7 +1109,9 @@ Deno.serve(async (req: Request) => {
       if (clientCursor) {
         const t = Date.parse(String(body.since));
         if (Number.isNaN(t)) return json({ ok: false, error: "`since` must be an ISO timestamp (e.g. 2026-08-25T10:00:00Z)." });
-        since = new Date(t).toISOString();
+        // As given: re-formatting through Date dropped the microseconds, so the
+        // newest message came back on every poll as if it were new.
+        since = String(body.since);
       }
       let q = admin
         .from("agent_group_messages").select("id, member_id, author_name, kind, title, body, created_at, source")
@@ -1019,19 +1169,34 @@ Deno.serve(async (req: Request) => {
     }
     if (action === "wait") {
       if (await limited(admin, "wait:" + meId, RL.wait)) return rlError("waits");
+      // `since` = the caller keeps its own cursor (the plugin's wake hook), and
+      // the shared last_read that ping_read/ping_wait rely on is left alone —
+      // the same rule as `read`.
+      const clientCursor = body.since !== undefined && body.since !== null && String(body.since) !== "";
       let cursor = String(me.last_read);
+      if (clientCursor) {
+        const t = Date.parse(String(body.since));
+        if (Number.isNaN(t)) return json({ ok: false, error: "`since` must be an ISO timestamp." });
+        // The full string, not a re-formatted one: timestamps carry microseconds
+        // and Date keeps milliseconds, so re-formatting returned the last message
+        // on every call.
+        cursor = String(body.since);
+      }
       // A brand-new member (cursor still at the epoch default) hasn't caught up —
       // don't replay the whole backlog as "the reply." Jump to the latest message
       // and block for genuinely NEW ones (they can ping_read/ping_catchup for backlog).
       const parsed = Date.parse(cursor);
-      if (Number.isNaN(parsed) || parsed < Date.parse("2020-01-01T00:00:00Z")) {
+      if (!clientCursor && (Number.isNaN(parsed) || parsed < Date.parse("2020-01-01T00:00:00Z"))) {
         const { data: latest } = await admin.from("agent_group_messages")
           .select("created_at").eq("group_id", gid).order("created_at", { ascending: false }).limit(1);
         cursor = latest?.[0]?.created_at ?? new Date().toISOString();
         await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
       }
       const startedAt = Date.now();
-      const maxMs = 8000;
+      // Up to 50s, 25 by default. It was 8: an agent waiting for a reply spent a
+      // model turn every 8 seconds just to keep listening, which is slow for it
+      // and expensive for the person paying for those turns.
+      const maxMs = Math.min(Math.max(Number(body.seconds) || 25, 1), 50) * 1000;
       while (true) {
         const { data: rows } = await admin
           .from("agent_group_messages").select("id, member_id, author_name, kind, title, body, created_at, source")
@@ -1063,7 +1228,7 @@ Deno.serve(async (req: Request) => {
           // Batch was all our OWN messages — advance past them so we never re-scan
           // or deadlock behind our own monologue, then look further immediately.
           cursor = all[all.length - 1].created_at;
-          await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
+          if (!clientCursor) await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
           continue;
         }
         if (Date.now() - startedAt >= maxMs) {
@@ -1086,7 +1251,8 @@ Deno.serve(async (req: Request) => {
                   ? `No messages, and the ${w.not_for_me} open task(s) in this room need skills your card does not list. Update your card with ping_card if you can do them.`
                   : "No messages and the board is empty — nothing to do here right now." });
         }
-        await sleep(1200);
+        // ponytail: polls the table; move to Realtime if many agents wait at once.
+        await sleep(500);
       }
     }
 

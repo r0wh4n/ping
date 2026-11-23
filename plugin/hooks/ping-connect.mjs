@@ -18,13 +18,13 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { fileURLToPath } from "node:url";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { readState, updateState, upsertRoom, roomsOf, roomMatchesCwd, hooksHealth } from "./ping-state.mjs";
 import { keyFromLink, linkWithKey, newRoomKey } from "./ping-crypto.mjs";
 
 const execFileP = promisify(execFile);
 
-const API = "https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1/group-api";
+const API = process.env.PING_API || "https://wsdslkxdoqwspjfozwvl.supabase.co/functions/v1/group-api";
 const ANON =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6IndzZHNsa3hkb3F3c3BqZm96d3ZsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ5ODg3NjQsImV4cCI6MjEwMDU2NDc2NH0.Kuop6VvV3Ykak8SqH8yBJbt0H6N-mB2-riSVFQS7aDo";
 
@@ -92,22 +92,39 @@ async function wireMcp() {
   // with a leading slash and percent-escapes, which is not a path any program
   // can open — the MCP server would be registered pointing at nothing.
   const server = fileURLToPath(new URL("./ping-mcp.mjs", import.meta.url));
-  let had = "";
-  try { had = (await execFileP("claude", ["mcp", "get", "ping"], { timeout: 30_000 })).stdout ?? ""; } catch { /* not registered yet */ }
-  if (had.includes(server)) return "current";
+  // What Claude Code will actually use: `mcp get` reports the winning scope.
+  const effective = async () => {
+    try { return (await execFileP("claude", ["mcp", "get", "ping"], { timeout: 30_000 })).stdout ?? ""; } catch { return ""; }
+  };
+  if ((await effective()).includes(server)) return "current";
+  const added = await addUserScope(server);
+  if (!added) return false;
+  // A `ping` at local or project scope beats user scope. A hosted one added by
+  // hand (`claude mcp add --transport http ping …`) kept answering after /ping,
+  // so the agent could neither encrypt nor read the room, and its tokens looked
+  // like they died. Remove a local one; a project one is the team's .mcp.json,
+  // so report it rather than edit someone else's file.
+  if (!(await effective()).includes(server)) {
+    try { await execFileP("claude", ["mcp", "remove", "ping", "--scope", "local"], { timeout: 30_000 }); } catch { /* none there */ }
+    if (!(await effective()).includes(server)) return "shadowed";
+  }
+  return "rewired";
+}
+
+async function addUserScope(server) {
   const args = [
     "mcp", "add", "--transport", "stdio", "ping", "--scope", "user",
     "--", process.execPath, server,
   ];
   try {
     await execFileP("claude", args, { timeout: 30_000 });
-    return "rewired";
+    return true;
   } catch {
     // Already registered (or half-registered) -> remove and retry once.
     try {
       await execFileP("claude", ["mcp", "remove", "ping", "--scope", "user"], { timeout: 30_000 });
       await execFileP("claude", args, { timeout: 30_000 });
-      return "rewired";
+      return true;
     } catch { return false; }
   }
 }
@@ -171,17 +188,20 @@ async function connect(mode, restRaw) {
       const wired = await wireMcp();
       console.log(JSON.stringify({
         ok: true, already_member: true, connected_as: mine.name ?? null, active_room: mine.group,
-        scoped_to: mine.path ?? "every project on this machine", mcp_registered: wired !== false, reconnect_required: wired === "rewired",
+        scoped_to: mine.path ?? "every project on this machine", mcp_registered: wired !== false && wired !== "shadowed", reconnect_required: wired === "rewired",
         rooms_watched: roomsOf(readState()).length, encrypted: Boolean(mine.key),
         note: "You were already in this room on this machine, so no second membership was created — the room is just active here now. To join as somebody else, or from scratch, leave it first with ping_leave.",
       }, null, 2));
       return;
     }
-    res = await callApi({ action: "join", link: code, name, role });
+    // has_key: this client encrypts. An encrypted room refuses a join without it.
+    res = await callApi({ action: "join", link: code, name, role, has_key: Boolean(key) });
+    if (res?.e2e && !key) die("This room is end-to-end encrypted, and the link you used has no key — the part after #k=. Chat apps sometimes cut it off. Ask whoever shared the room for the whole link, then run /ping with it again.");
   } else {
     const group = String(rest || "").trim().slice(0, 80);
     if (!group) die("Give the room a name:  /ping new <group name>");
-    res = await callApi({ action: "create_group", name: group, host_name: name, role });
+    // e2e: the key was made above, on this machine; the server never sees it.
+    res = await callApi({ action: "create_group", name: group, host_name: name, role, e2e: true });
   }
 
   if (!res) die("Couldn't reach Ping. Check your connection and try again.");
@@ -198,7 +218,7 @@ async function connect(mode, restRaw) {
     token: res.token, group, name, key: key ?? undefined,
     // The invite code is what identifies the room BEFORE a join tells us its
     // name, so it is the only thing a re-join can be matched against.
-    ...(mode === "join" ? { code: extractCode(rest) } : {}),
+    ...(mode === "join" ? { code: extractCode(rest) } : res.invite_code ? { code: res.invite_code } : {}),
     path: process.cwd(), last_seen: new Date().toISOString(),
   }));
 
@@ -212,7 +232,8 @@ async function connect(mode, restRaw) {
     owner: res.owner === true,
     active_room: group,
     scoped_to: process.cwd(),
-    mcp_registered: wired !== false,
+    mcp_registered: wired !== false && wired !== "shadowed",
+    ...(wired === "shadowed" ? { mcp_warning: "This project's .mcp.json defines its own `ping` server, and Claude Code uses that one instead of the plugin's — it cannot encrypt, so it cannot read or write this room. Remove the ping entry from .mcp.json (or run `claude mcp remove ping --scope project`), then restart Claude Code." } : {}),
     // The server counts members sharing this name and says so. It was being
     // thrown away here, which is why six duplicates accumulated unnoticed.
     ...(res.warning ? { warning: res.warning } : {}),
@@ -225,8 +246,8 @@ async function connect(mode, restRaw) {
       : {}),
     encrypted: Boolean(key),
     encryption_note: key
-      ? "End-to-end encrypted: messages, task details and results are sealed on this machine first, so the server can't read them. Room names, member names, roles and descriptions, and shared context are not sealed. The key is the part of the invite link after the # — share the whole link, and treat it like a password."
-      : "NOT end-to-end encrypted: this link carried no key, so the server can read this room. Ask whoever shared it for the full link including the part after the #.",
+      ? "End-to-end encrypted: messages, shared context, task details and results are sealed on this machine first, so the server can't read them. Room names, member names and roles are not sealed. The key is the part of the invite link after the # — share the whole link, and treat it like a password."
+      : "NOT end-to-end encrypted: this is an older room that was made without a key, so the server can read it. New rooms are always encrypted — create one with /ping new <name> for anything sensitive.",
     // The key is appended here, never server-side — the server is never told it.
     invite_url: res.invite_url ? linkWithKey(res.invite_url, key) : null,
     webhook_url: res.webhook_url ?? null,
@@ -273,6 +294,33 @@ async function main() {
   if (mode === "off") {
     updateState((s) => ({ ...s, watch: false }));
     console.log(JSON.stringify({ ok: true, watch: false, rooms_kept: roomsOf(readState()).length }));
+    return;
+  }
+  // Link this machine's agent to your Ping account, so you can approve its work
+  // and send it instructions from the Ping app. The member token and room key
+  // ride in the URL fragment, which browsers never send to a server.
+  if (mode === "link" || mode === "runner") {
+    const state = readState();
+    const here = roomsOf(state).filter((r) => roomMatchesCwd(r, process.cwd()));
+    const room = here.find((r) => r.group === state.active) ?? here[here.length - 1];
+    if (!room) die("No Ping room for this folder. Join one first with /ping <invite-link>.");
+    if (mode === "runner") {
+      const script = join(dirname(fileURLToPath(import.meta.url)), "ping-runner.mjs");
+      console.log(JSON.stringify({
+        ok: true,
+        room: room.group ?? "room",
+        command: `cd ${JSON.stringify(process.cwd())} && node ${JSON.stringify(script)}`,
+        note: "Run this in a terminal and leave it open. When a teammate posts in the room, Claude reads this project (read-only) and sends a plan to your Ping app; it only changes files after you approve. Link the app first with /ping link.",
+      }, null, 2));
+      return;
+    }
+    console.log(JSON.stringify({
+      ok: true,
+      room: room.group ?? "room",
+      agent: room.name ?? null,
+      link_url: `https://theping.chat/app/agents#link=${room.token}${room.key ? `&k=${room.key}` : ""}`,
+      note: "Open this on your phone while signed in to Ping, or paste it into the Agents tab. It proves this agent is yours and unlocks the room's messages, so don't share it.",
+    }, null, 2));
     return;
   }
   // Reprint the claim links for rooms this machine already joined, so a room
@@ -345,7 +393,7 @@ async function main() {
   }
 
   if (mode === "join" || mode === "new") return connect(mode, arg);
-  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping rooms   ·   /ping here   ·   /ping anywhere   ·   /ping detail labels|files|task   ·   /ping claim   ·   /ping off');
+  die('Usage:  /ping <invite-link>   ·   /ping new <group name>   ·   /ping rooms   ·   /ping here   ·   /ping anywhere   ·   /ping detail labels|files|task   ·   /ping claim   ·   /ping link   ·   /ping runner   ·   /ping off');
 }
 
 // Only when run as a command. Without this, importing anything from here —
