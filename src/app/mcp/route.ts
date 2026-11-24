@@ -121,9 +121,10 @@ const LATEST_PLUGIN: string = pluginManifest.version;
 
 function withUpdateNotice(data: unknown, req: Request): unknown {
   const seen = req.headers.get("x-ping-plugin");
-  // Exact inequality, deliberately: no semver ordering to get wrong, and the
-  // only version that is current is the current one.
-  if (!seen || seen === LATEST_PLUGIN || typeof data !== "object" || data === null) return data;
+  // Only an OLDER plugin hears about it. Exact inequality told anyone ahead of
+  // this deploy — a branch build on staging — to "update" back to the older
+  // release, and an agent passes that advice straight on.
+  if (!seen || !olderThan(seen, LATEST_PLUGIN) || typeof data !== "object" || data === null) return data;
   return {
     ...data,
     // Says the one thing it actually knows — the two version numbers differ.
@@ -138,6 +139,16 @@ function withUpdateNotice(data: unknown, req: Request): unknown {
       `\`claude plugin update ping@ping\` and restart Claude Code. An out-of-date plugin can behave ` +
       `differently from what this server expects; if something here seems wrong, update before investigating it.`,
   };
+}
+
+// "0.3.9" < "0.4.5", numerically per part. Anything unparsable is not older.
+function olderThan(a: string, b: string): boolean {
+  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
+  if ([...pa, ...pb].some(Number.isNaN)) return false;
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    if ((pa[i] ?? 0) !== (pb[i] ?? 0)) return (pa[i] ?? 0) < (pb[i] ?? 0);
+  }
+  return false;
 }
 
 function tokenFrom(req: Request): string | null {
