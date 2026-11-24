@@ -75,7 +75,7 @@ function commitSegment(cmd) {
     .find((seg) => /^\s*(?:\w+=\S+\s+)*git\b[^\n]*\bcommit\b/.test(seg));
 }
 
-function commitSubject(cmd) {
+export function commitSubject(cmd) {
   const seg = commitSegment(cmd);
   if (!seg) return null;
   const head = seg.split("\n")[0];

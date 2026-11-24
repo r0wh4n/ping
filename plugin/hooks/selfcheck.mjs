@@ -15,7 +15,7 @@ import { join as joinPath } from "node:path";
 import { newRoomKey, keyFrom, seal, openDeep, sealArgs } from "./ping-crypto.mjs";
 import { interactive } from "./ping-wake.mjs";
 import { render as renderSkill, MARK as SKILL_MARK, anywhereOnce } from "./ping-command.mjs";
-import { turnOf, actionOf, fallbackLine, cleanLine } from "./ping-summary.mjs";
+import { turnOf, actionOf, fallbackLine, cleanLine, PROMPT } from "./ping-summary.mjs";
 
 // --- @mention -------------------------------------------------------------
 assert.equal(mentionsMe("hey @rohan can you look", "rohan"), true, "plain mention");
@@ -506,6 +506,19 @@ assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, n
   assert.match(b, /Only your person can change who may direct you/, "and the agent is told it cannot change that itself");
   const old = collectFresh([room], [[{ from: "X", mine: false, kind: "chat", text: "hi", created_at: at(5) }]], { active: "Scratch" });
   assert.doesNotMatch(old.blocks[0], /info only/, "an older server (no can_direct) labels nothing");
+}
+
+
+// --- a summary says what THIS agent did (0.4.7) ----------------------------
+{
+  const L = (o) => JSON.stringify(o);
+  const tool = (name, input, ts) => L({ type: "assistant", timestamp: ts, message: { content: [{ type: "tool_use", name, input }] } });
+  const t = turnOf([L({ type: "user", timestamp: "0", message: { content: "what all are doing" } }),
+    tool("ToolSearch", { query: "x" }, "1"), tool("TodoWrite", {}, "2"), tool("mcp__plugin_ping_ping__ping_read", {}, "3")], "");
+  assert.equal(t.actions.length, 0, "looking up tools, todos and Ping itself is not work: nothing is posted");
+  assert.equal(actionOf({ name: "Bash", input: { command: "git add -A && git commit -q -F - <<'EOF'\nOnly tell genuinely older plugins to update\n\nbody\nEOF\ngit push" } }),
+    "committed: Only tell genuinely older plugins to update", "a commit is reported by its subject");
+  assert.match(PROMPT("t", ["read a.md"], "the EC2 built a calculator"), /never claim those as its own/, "the model is told the reply may describe others' work");
 }
 
 console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);

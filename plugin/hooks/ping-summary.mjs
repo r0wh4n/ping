@@ -20,10 +20,15 @@ import { pathToFileURL } from "node:url";
 import { readState, updateState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
 import { API, ANON, readStdin, statusRoom } from "./ping-watch.mjs";
 import { keyFrom, seal } from "./ping-crypto.mjs";
-import { taskFrom } from "./ping-activity.mjs";
+import { taskFrom, commitSubject } from "./ping-activity.mjs";
 import { redact } from "./ping-adapter.mjs";
 
 const isPing = (name) => /^mcp__.*ping/i.test(String(name));
+// Bookkeeping, not work: looking up a tool, a plan, a todo list, a question to
+// the person. A turn made only of these (plus Ping) reports nothing.
+const META = new Set(["ToolSearch", "Skill", "TodoWrite", "AskUserQuestion", "EnterPlanMode", "ExitPlanMode",
+  "ReadNotifications", "TaskStop", "TaskOutput", "Monitor", "ScheduleWakeup", "SendFeedback", "SendUserFile",
+  "ListAgents", "ListMcpResourcesTool", "ReadMcpResourceTool", "ReadMcpResourceDirTool"]);
 
 // One short label per tool call: what Haiku needs to say what happened, and
 // nothing it could repeat that should not leave the machine.
@@ -38,7 +43,13 @@ export function actionOf(p) {
     case "Grep": case "Glob": return "searched the code";
     case "WebSearch": return `searched the web: ${String(i.query ?? "").slice(0, 80)}`;
     case "WebFetch": { try { return `read ${new URL(i.url).hostname}`; } catch { return "read a web page"; } }
-    case "Bash": return `ran: ${redact(String(i.command ?? "")).replace(/\s+/g, " ").slice(0, 80)}`;
+    case "Bash": {
+      // A commit says what the work was in its subject; keep that, not the
+      // first 80 characters of a heredoc.
+      const subject = commitSubject(String(i.command ?? ""));
+      if (subject) return `committed: ${redact(subject).slice(0, 120)}`;
+      return `ran: ${redact(String(i.command ?? "")).replace(/\s+/g, " ").slice(0, 80)}`;
+    }
     case "Task": case "Agent": return `delegated: ${String(i.description ?? "").slice(0, 80)}`;
     default: return p?.name ? `used ${String(p.name).replace(/^mcp__/, "").slice(0, 40)}` : "";
   }
@@ -61,7 +72,7 @@ export function turnOf(lines, since) {
     }
     if (o.type !== "assistant") continue;
     for (const p of Array.isArray(o.message?.content) ? o.message.content : []) {
-      if (p?.type === "tool_use" && !isPing(p.name)) actions.push(actionOf(p));
+      if (p?.type === "tool_use" && !isPing(p.name) && !META.has(p.name)) actions.push(actionOf(p));
     }
   }
   return { task, actions: [...new Set(actions.filter(Boolean))].slice(0, 40), until };
@@ -75,17 +86,24 @@ export function fallbackLine(actions) {
   return parts.length ? parts.join("; ") : null;
 }
 
-const PROMPT = (task, actions, reply) =>
-  "Write a status line for a teammate's activity feed saying what a coding agent just did.\n" +
+// The Actions are the evidence. The final reply is context only: it often
+// reports what OTHER agents did ("the EC2 built the calculator") or what was
+// merely found, and a summary built from it claimed that work for this agent —
+// "Rohan (Mac): created a calculator.html…", which the Mac never did.
+export const PROMPT = (task, actions, reply) =>
+  "Write a status line for a teammate's activity feed saying what THIS coding agent itself just did.\n" +
+  "The Actions list is the only evidence of what it did. The request and final reply are context: the reply may describe " +
+  "work done by other people or other agents, or things it only found or checked — never claim those as its own. " +
+  "If the Actions only read, searched or ran checks, say what it looked into (e.g. \"checked what teammates are working on\"). " +
+  "Say something was created, changed or deleted only if an Action shows it.\n" +
   "Rules: one line, at most 14 words, past tense, start lowercase, no trailing period. " +
-  "Say what was made or changed in plain words, e.g. \"created a tic-tac-toe game and a counting.txt text file\" " +
-  "or \"researched 5 security advisories\" or \"fixed the login redirect bug\". " +
-  "Never include secrets, keys, tokens, passwords, emails, folder paths or code. " +
+  "Plain words, e.g. \"created a tic-tac-toe game and a counting.txt text file\", \"researched 5 security advisories\", " +
+  "\"fixed the login redirect bug\". Never include secrets, keys, tokens, passwords, emails, folder paths or code. " +
   "If nothing was done, reply exactly NONE. Reply with only the line.\n\n" +
   `Request: ${task ?? "(none)"}\nActions:\n- ${actions.join("\n- ")}\n` +
   `Agent's final reply: ${String(reply ?? "").replace(/\s+/g, " ").slice(0, 1500)}`;
 
-function haiku(prompt) {
+export function haiku(prompt) {
   return new Promise((resolve) => {
     // The prompt goes on stdin, not argv: on Windows `claude` may be a .cmd
     // that needs a shell, and a shell must never see this text. No tools, no
