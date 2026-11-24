@@ -1,6 +1,17 @@
 {
   "description": "Delivers new Ping room messages while the agent works and while it sits idle, and posts what this session is doing to its active room.",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-command.mjs\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [

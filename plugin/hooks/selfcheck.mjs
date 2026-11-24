@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { newRoomKey, keyFrom, seal, openDeep, sealArgs } from "./ping-crypto.mjs";
 import { interactive } from "./ping-wake.mjs";
+import { render as renderSkill, MARK as SKILL_MARK } from "./ping-command.mjs";
 
 // --- @mention -------------------------------------------------------------
 assert.equal(mentionsMe("hey @rohan can you look", "rohan"), true, "plain mention");
@@ -409,6 +410,16 @@ assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, n
   // The wake hook must not run where Claude Code would block on it (claude -p).
   assert.equal(interactive({ CLAUDE_CODE_ENTRYPOINT: "cli" }), true, "an interactive terminal session wakes");
   assert.equal(interactive({ CLAUDE_CODE_ENTRYPOINT: "sdk-cli", CLAUDE_CODE_SESSION_ATTENDED: "0" }), false, "claude -p never waits on it");
+}
+
+
+// --- /ping, not /ping:ping (0.4.1) -----------------------------------------
+{
+  const out = renderSkill('---\ndescription: d\nallowed-tools: Bash(node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs":*)\n---\n\nInput: $ARGUMENTS\n', "/opt/ping");
+  assert.match(out, /^---\nname: ping\n/, "the skill is named ping, so it is typed as /ping");
+  assert.ok(out.includes('node "/opt/ping/hooks/ping-connect.mjs"'), "the plugin path is filled in");
+  assert.ok(out.indexOf(SKILL_MARK) > out.indexOf("\n---\n", 3), "the marker sits after the frontmatter, not inside it");
+  assert.ok(out.includes("$ARGUMENTS"), "arguments are left for Claude Code to fill");
 }
 
 console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);
