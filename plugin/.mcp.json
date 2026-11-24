@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "ping": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/hooks/ping-mcp.mjs"]
+    }
+  }
+}

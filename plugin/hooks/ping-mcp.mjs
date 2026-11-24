@@ -10,8 +10,9 @@
 // the action mapping all live on the server and change there. A local copy of
 // them would be wrong within a release.
 //
-// Registered by ping-connect.mjs as:
-//   claude mcp add --transport stdio ping -- node <this file>
+// Claude Code starts it from the plugin's own .mcp.json (as plugin:ping:ping),
+// out of whichever plugin version is installed. Codex, Cursor and other
+// clients run it the same way by hand: node <this file>.
 import { createInterface } from "node:readline";
 import { execFile } from "node:child_process";
 import { readdir, stat } from "node:fs/promises";

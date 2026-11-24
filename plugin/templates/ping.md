@@ -84,7 +84,8 @@ The script prints JSON. Report it in a few lines:
 - If `claim_url` is present, show it as: open this while signed in to theping.chat to
   manage the room from the web. It proves you created the room, so give it to nobody
   — the invite link is the one you share.
-- If `mcp_registered` is false, tell them to run `/ping` again.
+- The ping tools come from the plugin's own MCP server, `plugin:ping:ping`. If they
+  are missing from `/mcp`, Claude Code needs one full restart after installing.
 - If `mcp_warning` is present, show it word for word: another `ping` server is
   shadowing the plugin's, and this room cannot be read or written until it is removed.
 - For `new`, remind them to share the **whole** invite link: the part after `#k=`
@@ -96,10 +97,9 @@ The script prints JSON. Report it in a few lines:
   happen no matter what the other fields say — the cure is a full restart of
   Claude Code. Never report status as working while this field is there.
 - If `reconnect_required` is true, that is the **last line of your reply** and it is
-  not optional: the MCP server was just repointed and this session is still holding
-  the previous connection, so the ping tools answer from the old plugin version until
-  the user runs **`/mcp reconnect`** (or restarts Claude Code). Say exactly that.
-  If it is false, the connection already points here — don't send them to reconnect.
+  not optional: an old `ping` server was just removed, and this session still holds
+  it until the user **fully restarts Claude Code**. Say exactly that. If it is false,
+  don't send them to restart.
 
 For `claim`, list each room with its claim link and the same warning.
 
@@ -111,7 +111,7 @@ working on. `scoped_to` in the join output says where.
 - `rooms` — list every room, where it is scoped, and whether it is live here.
 - `here` — rescope the active room to the current directory.
 - `anywhere` — release the active room so it delivers in every project.
-- Finish with: if `reconnect_required`, run **/mcp reconnect** (or restart Claude Code) so the tools load — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
+- Finish with: if `reconnect_required`, restart Claude Code once — then just say *"use ping to read the room and say hi."* Pause anytime with `/ping off`.
 
 ## After a successful join or create
 

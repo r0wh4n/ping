@@ -72,61 +72,30 @@ async function callApi(body, token) {
 // a dead one is correct — so this has to be asked before deciding not to join.
 const tokenAlive = async (token) => (await callApi({ action: "whoami" }, token))?.ok === true;
 
-// Register the MCP server. This is the local sealing proxy, not the hosted URL:
-// the room key lives on this machine, so the encryption has to happen here,
-// before anything is sent. The proxy reads the token and key from the state
-// file, so neither is passed on a command line or printed into the transcript.
-/**
- * Point the `ping` MCP server at this copy of the plugin.
- *
- * Returns "current" when the registration already named this exact file —
- * nothing changed, so the session's live connection is the right one — or
- * "rewired" when it was added or repointed, which the running session cannot
- * pick up on its own. The path carries the plugin's version number, so a plugin
- * update silently strands the registration on the old version's cache
- * directory: the tools keep answering, from code releases out of date. That is
- * why a rewire has to say "/mcp reconnect" out loud instead of looking fine.
- */
+// The plugin starts its own MCP server — the local sealing proxy, from
+// plugin/.mcp.json — out of whichever version is installed. /ping used to
+// register one with `claude mcp add`, at a path inside a single version's cache
+// folder: every plugin update stranded it on the old version, and on some
+// machines it was never written at all, so the ping tools simply were not
+// there. Nothing to register any more.
+//
+// What is left is clearing out a `ping` server registered the old way, or
+// added by hand — a hosted one (`--transport http … theping.chat/mcp`) cannot
+// encrypt, and two servers would mean two sets of Ping tools. Local and user
+// scope are this person's own config; a project-scope one lives in the team's
+// .mcp.json, so it is reported rather than edited.
+//
+// Returns "clean" (nothing to remove), "cleared" (removed; this session still
+// holds the old connection until it restarts) or "shadowed" (a project one).
 async function wireMcp() {
-  // fileURLToPath, not .pathname: on Windows the latter yields "/C:/Users/..."
-  // with a leading slash and percent-escapes, which is not a path any program
-  // can open — the MCP server would be registered pointing at nothing.
-  const server = fileURLToPath(new URL("./ping-mcp.mjs", import.meta.url));
-  // What Claude Code will actually use: `mcp get` reports the winning scope.
-  const effective = async () => {
+  const get = async () => {
     try { return (await execFileP("claude", ["mcp", "get", "ping"], { timeout: 30_000 })).stdout ?? ""; } catch { return ""; }
   };
-  if ((await effective()).includes(server)) return "current";
-  const added = await addUserScope(server);
-  if (!added) return false;
-  // A `ping` at local or project scope beats user scope. A hosted one added by
-  // hand (`claude mcp add --transport http ping …`) kept answering after /ping,
-  // so the agent could neither encrypt nor read the room, and its tokens looked
-  // like they died. Remove a local one; a project one is the team's .mcp.json,
-  // so report it rather than edit someone else's file.
-  if (!(await effective()).includes(server)) {
-    try { await execFileP("claude", ["mcp", "remove", "ping", "--scope", "local"], { timeout: 30_000 }); } catch { /* none there */ }
-    if (!(await effective()).includes(server)) return "shadowed";
+  if (!(await get())) return "clean";
+  for (const scope of ["local", "user"]) {
+    try { await execFileP("claude", ["mcp", "remove", "ping", "--scope", scope], { timeout: 30_000 }); } catch { /* not in that scope */ }
   }
-  return "rewired";
-}
-
-async function addUserScope(server) {
-  const args = [
-    "mcp", "add", "--transport", "stdio", "ping", "--scope", "user",
-    "--", process.execPath, server,
-  ];
-  try {
-    await execFileP("claude", args, { timeout: 30_000 });
-    return true;
-  } catch {
-    // Already registered (or half-registered) -> remove and retry once.
-    try {
-      await execFileP("claude", ["mcp", "remove", "ping", "--scope", "user"], { timeout: 30_000 });
-      await execFileP("claude", args, { timeout: 30_000 });
-      return true;
-    } catch { return false; }
-  }
+  return (await get()) ? "shadowed" : "cleared";
 }
 
 // `/ping join <link> --name "Rohan" --role backend`. The command asks the
@@ -188,7 +157,7 @@ async function connect(mode, restRaw) {
       const wired = await wireMcp();
       console.log(JSON.stringify({
         ok: true, already_member: true, connected_as: mine.name ?? null, active_room: mine.group,
-        scoped_to: mine.path ?? "every project on this machine", mcp_registered: wired !== false && wired !== "shadowed", reconnect_required: wired === "rewired",
+        scoped_to: mine.path ?? "every project on this machine", mcp_registered: wired !== "shadowed", reconnect_required: wired === "cleared",
         rooms_watched: roomsOf(readState()).length, encrypted: Boolean(mine.key),
         note: "You were already in this room on this machine, so no second membership was created — the room is just active here now. To join as somebody else, or from scratch, leave it first with ping_leave.",
       }, null, 2));
@@ -232,14 +201,14 @@ async function connect(mode, restRaw) {
     owner: res.owner === true,
     active_room: group,
     scoped_to: process.cwd(),
-    mcp_registered: wired !== false && wired !== "shadowed",
+    mcp_registered: wired !== "shadowed",
     ...(wired === "shadowed" ? { mcp_warning: "This project's .mcp.json defines its own `ping` server, and Claude Code uses that one instead of the plugin's — it cannot encrypt, so it cannot read or write this room. Remove the ping entry from .mcp.json (or run `claude mcp remove ping --scope project`), then restart Claude Code." } : {}),
     // The server counts members sharing this name and says so. It was being
     // thrown away here, which is why six duplicates accumulated unnoticed.
     ...(res.warning ? { warning: res.warning } : {}),
     // True only when the registration actually changed under a running session.
-    reconnect_required: wired === "rewired",
-    ...(wired === "rewired" ? { reconnect_note: "The ping MCP server was just pointed at this plugin version, and this session is still holding the old connection. Run /mcp reconnect — or restart Claude Code — before using the ping tools, or they will answer from the previous version." } : {}),
+    reconnect_required: wired === "cleared",
+    ...(wired === "cleared" ? { reconnect_note: "Removed an old `ping` MCP server (registered by an earlier version of this plugin, or added by hand). The plugin runs its own now, as `plugin:ping:ping`. Fully restart Claude Code once so this session drops the old one." } : {}),
     rooms_watched: roomsOf(readState()).length,
     ...(hooksHealth(readState()).stale
       ? { hooks_warning: "Joined, but this session's hooks have not run, so messages will not arrive on their own yet. Fully quit and reopen Claude Code — a fresh install always needs this once." }
@@ -256,7 +225,6 @@ async function connect(mode, restRaw) {
     // invite link cannot -- show it to your own user, never to the room.
     claim_url: mode === "new" ? claimUrl(res.token) : null,
   }, null, 2));
-  if (!wired) console.log("\nNote: `claude mcp add` didn't succeed — run /ping again, or add the server manually.");
 }
 
 async function main() {
