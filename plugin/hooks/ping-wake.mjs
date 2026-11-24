@@ -20,6 +20,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DIR, readState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
 import { API, ANON, readStdin, collectFresh, saveCursors, noteDead } from "./ping-watch.mjs";
+import { popupAsks } from "./ping-notify.mjs";
 
 const WAIT_S = 50; // the server's longest wait
 // Stop listening after this long with nothing said; the next stop starts again.
@@ -115,7 +116,7 @@ async function main() {
     // Re-read: another hook may have delivered these while we waited.
     const now = readState();
     const fresh = rooms.map((r) => roomsOf(now).find((x) => x.token === r.token) ?? r);
-    const { blocks, next, changed, anyNews } = collectFresh(fresh, results.map((r) => (Array.isArray(r) ? r : null)), now);
+    const { blocks, next, changed, anyNews, asks } = collectFresh(fresh, results.map((r) => (Array.isArray(r) ? r : null)), now);
     if (changed) saveCursors(next);
     // Status lines alone do not wake anyone: each one cost every idle agent in
     // the room a model turn. They are passed over here and shown mid-task.
@@ -126,6 +127,7 @@ async function main() {
       `📨 New Ping messages:\n${blocks.join("\n")}\n\n` +
       `Reply with the ping_say tool${hint} if a reply is needed. To reply in another room, pass its token shown above as room:"gm_…". If nothing is needed, stop.`
     );
+    popupAsks(asks[0]?.agent, asks);
     process.exit(2);
   }
   process.exit(0);

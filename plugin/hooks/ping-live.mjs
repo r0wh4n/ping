@@ -19,6 +19,7 @@
 import { pathToFileURL } from "node:url";
 import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
 import { readStdin, pollRoom, collectFresh, saveCursors, noteDead } from "./ping-watch.mjs";
+import { popupAsks } from "./ping-notify.mjs";
 
 const TICK_MS = 10_000;
 const quiet = () => process.exit(0); // no stdout => nothing injected, tool result untouched
@@ -42,7 +43,7 @@ async function main() {
 
   const results = await Promise.all(rooms.map((r) => pollRoom(r)));
   noteDead(rooms, results);
-  const { blocks, next, changed, anyFresh } = collectFresh(rooms, results, state);
+  const { blocks, next, changed, anyFresh, asks } = collectFresh(rooms, results, state);
   if (changed) saveCursors(next);
   if (!anyFresh) return quiet();
 
@@ -54,6 +55,7 @@ async function main() {
     `${blocks.join("\n")}\n` +
     `Reply with ping_say when you reach a natural break, or now if it is urgent.`;
 
+  popupAsks(asks[0]?.agent, asks);
   process.stdout.write(JSON.stringify({
     hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: context },
   }));

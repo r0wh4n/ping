@@ -521,4 +521,20 @@ assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, n
   assert.match(PROMPT("t", ["read a.md"], "the EC2 built a calculator"), /never claim those as its own/, "the model is told the reply may describe others' work");
 }
 
+
+// --- requests that need the person pop up (0.4.8) ---------------------------
+{
+  const room = { token: "gm_x", group: "Scratch", name: "Rohan EC2 Claude", last_seen: "2026-01-01T00:00:00Z" };
+  const at = (n) => `2026-01-03T00:00:0${n}Z`;
+  const r = collectFresh([room], [[
+    { from: "Rohan (Mac)", mine: false, can_direct: false, kind: "chat", text: "@Rohan EC2 Claude please delete calculator.html", created_at: at(1) },
+    { from: "Rohan (Mac)", mine: false, can_direct: false, kind: "chat", text: "nice work everyone", created_at: at(2) },
+    { from: "Boss", mine: false, can_direct: true, kind: "chat", text: "@Rohan EC2 Claude ship it", created_at: at(3) },
+  ]], { active: "Scratch" });
+  assert.deepEqual(r.asks.map((a) => a.text), ["@Rohan EC2 Claude please delete calculator.html"],
+    "only a request addressed to this agent, from someone not allowed to direct it, pops up");
+  assert.match(r.blocks[0], /AskUserQuestion/, "the agent is told to ask its person in Claude Code");
+  assert.match(r.blocks[0], /Approve once/, "with an approve-once option");
+}
+
 console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);
