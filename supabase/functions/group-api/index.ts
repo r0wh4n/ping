@@ -142,6 +142,30 @@ async function groupName(admin: Admin, gid: string): Promise<string | null> {
   const { data } = await admin.from("agent_groups").select("name").eq("id", gid).maybeSingle();
   return data ? String(data.name) : null;
 }
+/**
+ * The members whose requests and tasks count as work for this member's agent:
+ * the ones its person allowed in the Ping app, and its person's own other
+ * agents (members linked to the same account). Nobody else. Read here, never
+ * written: there is no member-token action that changes it, so an agent that
+ * has been talked into something cannot widen who may talk to it.
+ */
+async function directorsOf(admin: Admin, meId: string): Promise<Set<string>> {
+  const out = new Set<string>();
+  const t = await admin.from("agent_member_trust").select("trusted_member_id").eq("member_id", meId);
+  for (const r of t.data ?? []) out.add(String(r.trusted_member_id));
+  const me = await admin.from("agent_group_members").select("user_id,group_id").eq("id", meId).maybeSingle();
+  if (me.data?.user_id) {
+    const same = await admin.from("agent_group_members").select("id")
+      .eq("group_id", me.data.group_id).eq("user_id", me.data.user_id);
+    for (const r of same.data ?? []) out.add(String(r.id));
+  }
+  out.delete(meId);
+  return out;
+}
+const NOT_ALLOWED = (who: string) =>
+  `${who} is not allowed to give your agent work. Only your person can change that: link this agent to their Ping account ` +
+  "(`/ping link`), then in the Ping app open Agents and allow the members who may direct it.";
+
 async function memberCount(admin: Admin, gid: string): Promise<number> {
   const { count } = await admin
     .from("agent_group_members").select("id", { count: "exact", head: true }).eq("group_id", gid);
@@ -158,16 +182,18 @@ async function memberCount(admin: Admin, gid: string): Promise<number> {
  * Untagged tasks match everyone; an agent already at its limit is told nothing,
  * since it cannot act on it anyway.
  */
-async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknown) {
+async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknown, directors?: Set<string>) {
   const mine = (((card ?? {}) as { skills?: string[] }).skills ?? []).map((x) => String(x).toLowerCase());
   const { count: held } = await admin.from("agent_tasks")
     .select("id", { count: "exact", head: true })
     .eq("group_id", gid).eq("assignee", meId).in("state", ["working", "input-required"]);
   const atLimit = (held ?? 0) >= 3;
   const { data } = await admin.from("agent_tasks")
-    .select("id,title,detail,artifact,skills,created_at").eq("group_id", gid).eq("state", "submitted")
+    .select("id,title,detail,artifact,skills,created_at,created_by").eq("group_id", gid).eq("state", "submitted")
     .order("created_at", { ascending: true }).limit(50);
-  const open = data ?? [];
+  // Work from members this agent's person has not allowed is not work for it.
+  const all = data ?? [];
+  const open = directors ? all.filter((t) => String(t.created_by) === meId || directors.has(String(t.created_by))) : all;
   const matches = open.filter((t) => {
     const need = ((t.skills ?? []) as string[]).map((x) => String(x).toLowerCase());
     return need.length === 0 || need.some((n) => mine.includes(n));
@@ -192,6 +218,7 @@ async function openWorkFor(admin: Admin, gid: string, meId: string, card: unknow
     }),
     open_total: open.length,
     not_for_me: open.length - matches.length,
+    not_allowed: all.length - open.length,
     at_limit: atLimit,
   };
 }
@@ -285,7 +312,7 @@ async function manageInvite(admin: Admin, gid: string, op: string, body: Record<
 }
 
 // deno-lint-ignore no-explicit-any
-async function shape(admin: Admin, rows: any[], meId: string) {
+async function shape(admin: Admin, rows: any[], meId: string, directors?: Set<string>) {
   const ids = [...new Set(rows.map((m) => m.member_id).filter(Boolean))];
   const names: Record<string, string> = {};
   if (ids.length) {
@@ -296,6 +323,8 @@ async function shape(admin: Admin, rows: any[], meId: string) {
     id: m.id,
     from: m.author_name ?? (m.member_id ? (names[String(m.member_id)] ?? "?") : (m.source ?? "webhook")),
     mine: m.member_id === meId,
+    // May the sender direct the reader's agent? A webhook or system event never can.
+    ...(directors ? { can_direct: m.member_id === meId || (m.member_id ? directors.has(String(m.member_id)) : false) } : {}),
     kind: m.kind, title: m.title, text: m.body, created_at: m.created_at,
   }));
 }
@@ -732,11 +761,15 @@ Deno.serve(async (req: Request) => {
       // when the owner column has not landed yet.
       const ownerRow = await admin.from("agent_groups").select("owner_member_id").eq("id", gid).maybeSingle();
       const ownerId = ownerRow.error ? null : (ownerRow.data?.owner_member_id ?? null);
+      const dirs = await directorsOf(admin, meId);
       return json({ ok: true, group: await groupName(admin, gid), members: (ms ?? []).map((m) => {
         const card = (m.card ?? {}) as { description?: string; skills?: string[]; model?: string };
         return {
           name: m.name,
           you: String(m.id) === meId,
+          // Whether this member's requests and tasks count as work for YOUR
+          // agent. Set by your person in the Ping app, never by an agent.
+          can_direct_you: String(m.id) !== meId && dirs.has(String(m.id)),
           // Discipline, and who created the room.
           role: (m.role as string | null) ?? null,
           owner: ownerId !== null && String(m.id) === String(ownerId),
@@ -910,7 +943,11 @@ Deno.serve(async (req: Request) => {
       // agent take BOTH tasks — including one needing a skill it had not claimed —
       // while the only qualified agent sat idle. Silently allowing that makes
       // capability cards decorative.
-      const { data: want } = await admin.from("agent_tasks").select("skills,title").eq("id", id).eq("group_id", gid).maybeSingle();
+      const { data: want } = await admin.from("agent_tasks").select("skills,title,created_by").eq("id", id).eq("group_id", gid).maybeSingle();
+      if (want && String(want.created_by) !== meId && !(await directorsOf(admin, meId)).has(String(want.created_by))) {
+        const { data: by } = await admin.from("agent_group_members").select("name").eq("id", want.created_by).maybeSingle();
+        return json({ ok: false, not_allowed: true, error: NOT_ALLOWED(by?.name ? `"${by.name}"` : "Whoever offered this task") });
+      }
       const force = body.force === true;
       if (want && !force) {
         const need = (want.skills ?? []) as string[];
@@ -1123,9 +1160,10 @@ Deno.serve(async (req: Request) => {
         const cursor = msgs.length ? msgs[msgs.length - 1].created_at : new Date().toISOString();
         await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
       }
-      const w = await openWorkFor(admin, gid, meId, me.card);
-      return json({ ok: true, group: await groupName(admin, gid), count: msgs.length, messages: await shape(admin, msgs, meId),
-        open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me,
+      const dirs = await directorsOf(admin, meId);
+      const w = await openWorkFor(admin, gid, meId, me.card, dirs);
+      return json({ ok: true, group: await groupName(admin, gid), count: msgs.length, messages: await shape(admin, msgs, meId, dirs),
+        open_tasks: w.mine, open_total: w.open_total, not_for_me: w.not_for_me, not_allowed: w.not_allowed,
         ...(w.mine.length ? { work_note: "Open work matching your card. Take one with ping_claim." } : {}) });
     }
     if (action === "history") {
@@ -1146,7 +1184,7 @@ Deno.serve(async (req: Request) => {
       const { data: hrows } = await hq;
       const desc = hrows ?? [];
       const asc = [...desc].reverse();
-      return json({ ok: true, group: await groupName(admin, gid), count: asc.length, has_more: desc.length === limit, next_before: desc.length ? desc[desc.length - 1].created_at : null, messages: await shape(admin, asc, meId) });
+      return json({ ok: true, group: await groupName(admin, gid), count: asc.length, has_more: desc.length === limit, next_before: desc.length ? desc[desc.length - 1].created_at : null, messages: await shape(admin, asc, meId, await directorsOf(admin, meId)) });
     }
     if (action === "catchup") {
       if (await limited(admin, "synth:" + meId, RL.synth)) return rlError("summaries");
@@ -1192,6 +1230,7 @@ Deno.serve(async (req: Request) => {
         cursor = latest?.[0]?.created_at ?? new Date().toISOString();
         await admin.from("agent_group_members").update({ last_read: cursor }).eq("id", meId);
       }
+      const dirs = await directorsOf(admin, meId);
       const startedAt = Date.now();
       // Up to 50s, 25 by default. It was 8: an agent waiting for a reply spent a
       // model turn every 8 seconds just to keep listening, which is slow for it
@@ -1213,14 +1252,14 @@ Deno.serve(async (req: Request) => {
             // test agents sat in one room for nine minutes each believing the
             // other had never spoken. Re-delivering until an explicit read is the
             // safe direction to fail in.
-            const w = await openWorkFor(admin, gid, meId, me.card);
+            const w = await openWorkFor(admin, gid, meId, me.card, dirs);
             return json({ ok: true, count: fresh.length, new_messages: fresh.length,
-              messages: await shape(admin, fresh, meId),
+              messages: await shape(admin, fresh, meId, dirs),
               // Always emitted. Its absence used to be the only way to tell that
               // the wait had returned early, which meant reading a missing key.
               timed_out: false, idle: false,
               open_tasks: w.mine, open_tasks_count: w.mine.length,
-              open_total: w.open_total, not_for_me: w.not_for_me,
+              open_total: w.open_total, not_for_me: w.not_for_me, not_allowed: w.not_allowed,
               ...(w.mine.length ? { work_note: "Open work matching your card. Take one with ping_claim." } : {}),
               note: "Call ping_read to mark these read — until you do, ping_wait will keep showing them. " +
               "(`count` is new chat messages only — open work is counted separately in `open_tasks_count`.)" });
@@ -1232,7 +1271,7 @@ Deno.serve(async (req: Request) => {
           continue;
         }
         if (Date.now() - startedAt >= maxMs) {
-          const w = await openWorkFor(admin, gid, meId, me.card);
+          const w = await openWorkFor(admin, gid, meId, me.card, dirs);
           // Two separate facts that were being carried by one flag. `timed_out`
           // is about the poll: it expired without a message. `idle` is about the
           // room: there is nothing here for you either way. A wait that times
@@ -1241,7 +1280,7 @@ Deno.serve(async (req: Request) => {
           const idle = w.mine.length === 0;
           return json({ ok: true, count: 0, new_messages: 0, timed_out: true, idle,
             open_tasks: w.mine, open_tasks_count: w.mine.length,
-            open_total: w.open_total, not_for_me: w.not_for_me,
+            open_total: w.open_total, not_for_me: w.not_for_me, not_allowed: w.not_allowed,
             ...(w.mine.length ? { work_note: "Nobody spoke, but there is open work matching your card. Take one with ping_claim." } : {}),
             note: w.mine.length
               ? "No messages, but work is waiting for you above."

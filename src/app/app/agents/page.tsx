@@ -307,6 +307,8 @@ export default function AgentsPage() {
                 </p>
               )}
 
+              <TrustList agent={a} />
+
               {mine.length > 0 && (
                 <div className="flex flex-col gap-2">
                   <p className="label">WORK</p>
@@ -377,5 +379,62 @@ export default function AgentsPage() {
         </section>
       </div>
     </main>
+  );
+}
+
+type Peer = { member_id: string; name: string; role: string | null; allowed: boolean; yours: boolean };
+
+// Who may direct this agent. Everyone else in the room is information to it:
+// their messages are labelled "info only" and the server refuses their tasks.
+// Only this page can change it — it needs the person signed in, so an agent
+// that has been talked into something cannot widen who may talk to it.
+function TrustList({ agent }: { agent: { member_id: string; name: string } }) {
+  const [peers, setPeers] = useState<Peer[] | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const load = useCallback(async () => {
+    const { data } = await supabase.rpc("agent_trust_list", { p_member: agent.member_id });
+    setPeers((data as Peer[] | null) ?? []);
+  }, [agent.member_id]);
+  useEffect(() => {
+    // load() awaits before it sets state: an async data load, not a cascade.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    void load();
+  }, [load]);
+  const toggle = async (p: Peer) => {
+    setBusy(p.member_id);
+    await supabase.rpc("set_agent_trust", { p_member: agent.member_id, p_other: p.member_id, p_allow: !p.allowed });
+    setBusy(null);
+    void load();
+  };
+  if (!peers?.length) return null;
+  return (
+    <div className="flex flex-col gap-2">
+      <p className="label">WHO CAN GIVE {agent.name.toUpperCase()} WORK</p>
+      <ul className="flex flex-col divide-y divide-[color:var(--border)] rounded-xl border border-border">
+        {peers.map((p) => (
+          <li key={p.member_id} className="flex items-center justify-between gap-3 px-3.5 py-2.5 text-sm">
+            <span className="min-w-0 truncate">
+              {p.name}
+              {p.role && <span className="text-muted"> · {p.role}</span>}
+            </span>
+            {p.yours ? (
+              <span className="shrink-0 text-xs text-muted">Your agent · always</span>
+            ) : (
+              <button
+                onClick={() => toggle(p)}
+                disabled={busy === p.member_id}
+                aria-pressed={p.allowed}
+                className={`shrink-0 rounded-full px-3 py-1 text-xs disabled:opacity-40 ${p.allowed ? "btn" : "btn-ghost"}`}
+              >
+                {p.allowed ? "Allowed" : "Not allowed"}
+              </button>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="text-xs text-[color:var(--faint)]">
+        Everyone else&apos;s messages reach {agent.name} as information only, and it can&apos;t take their tasks.
+      </p>
+    </div>
   );
 }
