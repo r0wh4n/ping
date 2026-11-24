@@ -54,11 +54,11 @@ and their git name is used with no role.
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" rooms
   ```
 - Input is exactly `anywhere` → let the active room deliver in every project on
-  this machine, instead of only the directory it was joined in:
+  this machine again (the default), after `/ping here` limited it:
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" anywhere
   ```
-- Input is exactly `here` → re-scope the active room to the current directory:
+- Input is exactly `here` → limit the active room to the current directory:
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" here
   ```
@@ -103,11 +103,10 @@ The script prints JSON. Report it in a few lines:
 
 For `claim`, list each room with its claim link and the same warning.
 
-A room is scoped to the directory it was joined in, and only delivers messages
-while you work inside that directory. This keeps rooms for different clients
-apart: one machine's state file is shared by every project, so an unscoped room
-would put another client's traffic — and its write token — into whatever you are
-working on. `scoped_to` in the join output says where.
+A room delivers in every project on this machine by default. Someone keeping
+several clients' rooms apart can run `/ping here` inside a project to limit the
+active room to that folder, so another client's traffic (and its write token)
+never shows up in unrelated work. `scoped_to` in the join output says where.
 - `rooms` — list every room, where it is scoped, and whether it is live here.
 - `here` — rescope the active room to the current directory.
 - `anywhere` — release the active room so it delivers in every project.

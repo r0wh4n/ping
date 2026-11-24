@@ -180,15 +180,15 @@ async function connect(mode, restRaw) {
 
   // Seed the cursor to NOW. Seeding from the first poll's page instead meant a
   // busy room replayed up to 200 old messages at you as if they were new.
-  // Scope the room to the project it was joined in: the state file is shared
-  // across every project on this machine, so without a path this room's traffic
-  // (and its write token) would be delivered into unrelated work.
   updateState((s) => upsertRoom(s, {
     token: res.token, group, name, key: key ?? undefined,
     // The invite code is what identifies the room BEFORE a join tells us its
     // name, so it is the only thing a re-join can be matched against.
     ...(mode === "join" ? { code: extractCode(rest) } : res.invite_code ? { code: res.invite_code } : {}),
-    path: process.cwd(), last_seen: new Date().toISOString(),
+    // No path: a room delivers in every project on this machine, which is what
+    // people expect after joining. `/ping here` narrows it to one folder for
+    // anyone keeping several clients' rooms apart.
+    last_seen: new Date().toISOString(),
   }));
 
   const wired = await wireMcp();
@@ -200,7 +200,7 @@ async function connect(mode, restRaw) {
     ...(res.role_note ? { role_note: res.role_note } : {}),
     owner: res.owner === true,
     active_room: group,
-    scoped_to: process.cwd(),
+    scoped_to: "every project on this machine (use /ping here to limit it to this folder)",
     mcp_registered: wired !== "shadowed",
     ...(wired === "shadowed" ? { mcp_warning: "This project's .mcp.json defines its own `ping` server, and Claude Code uses that one instead of the plugin's — it cannot encrypt, so it cannot read or write this room. Remove the ping entry from .mcp.json (or run `claude mcp remove ping --scope project`), then restart Claude Code." } : {}),
     // The server counts members sharing this name and says so. It was being

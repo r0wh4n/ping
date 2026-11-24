@@ -327,7 +327,7 @@ async function handleCall(id, params) {
     if (data?.ok && data.token) {
       updateState((s) => upsertRoom(s, {
         token: data.token, group: data.group ?? data.name, name: args.your_name,
-        key: fresh, path: process.cwd(), last_seen: new Date().toISOString(),
+        key: fresh, last_seen: new Date().toISOString(), // every project, like /ping
         // The invite code, so a later ping_join of this same room from this
         // machine (a subagent, a second session) reuses this membership.
         ...(data.invite_code ? { code: data.invite_code } : {}),
@@ -383,7 +383,7 @@ async function handleCall(id, params) {
         // Remember the invite code: it is the only thing that identifies this
         // room on a later join, before the server tells us its name.
         key: joined ?? undefined, ...(code ? { code } : {}),
-        path: process.cwd(), last_seen: new Date().toISOString(),
+        last_seen: new Date().toISOString(), // every project, like /ping
       }));
       data.encryption = joined
         ? "End-to-end encrypted. Everything you write is sealed on this machine before it is sent."
