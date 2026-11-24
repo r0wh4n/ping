@@ -231,11 +231,9 @@ async function main() {
   const [mode, ...rest] = process.argv.slice(2);
   const arg = rest.join(" ");
 
-  // Automatic activity updates, off by default. On, every time the agent goes
-  // idle the Stop hook reads the session transcript and logs one line — files
-  // edited, commands run, commits made — to the ACTIVE room, at most once a
-  // minute. Of what you typed it sends only the first sentence of the latest request,
-  // never the rest of the conversation, file contents or tool output.
+  // Turn summaries, on by default. When the agent finishes a turn that did
+  // something, ping-summary.mjs posts one line saying what was done ("created a
+  // tic-tac-toe game and a counting.txt file") to the ACTIVE room, sealed.
   if (mode === "status") {
     const on = arg.trim().toLowerCase() === "on";
     const off = arg.trim().toLowerCase() === "off";
@@ -253,8 +251,8 @@ async function main() {
       hooks_last_ran: health.ran ?? "never",
       ...(on && health.stale ? { hooks_warning: "Status is recorded, but this session's hooks have not run — so nothing will actually be posted. Activity updates come from a hook Claude Code loads when a session STARTS, so installing or updating the plugin inside a running session leaves them unregistered. Fully quit and reopen Claude Code — not /mcp reconnect, not resume." } : {}),
       note: on
-        ? `Auto-updates on. When this agent goes idle it will post a one-line summary to "${room ?? "your active room"}", at most once a minute: the kind of work it did ("working on the backend"), your project folder's name, the first sentence of your latest request, and commit subjects as written. File contents, command text and the rest of the conversation are not sent. Turn off with /ping status off.`
-        : "Auto-updates off: no idle summaries. While this session is connected, Ping still posts your new commit subjects, or which part of the project you're working on, to the active room about once a minute.",
+        ? `Auto-updates on. Each time this agent finishes something, it posts one line to "${room ?? "your active room"}" saying what it did — e.g. "created a tic-tac-toe game and a counting.txt file" — encrypted. Claude Haiku writes the line from your request, the tools used and the agent's final reply; files, command output and the conversation itself are never posted. Turn off with /ping status off.`
+        : "Auto-updates off: this agent no longer posts what it did. It still reads and answers the room.",
     }, null, 2));
     return;
   }

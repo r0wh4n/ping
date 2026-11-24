@@ -18,7 +18,7 @@
 
 import { pathToFileURL } from "node:url";
 import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
-import { readStdin, pollRoom, postStatus, collectFresh, saveCursors, noteDead } from "./ping-watch.mjs";
+import { readStdin, pollRoom, collectFresh, saveCursors, noteDead } from "./ping-watch.mjs";
 
 const TICK_MS = 10_000;
 const quiet = () => process.exit(0); // no stdout => nothing injected, tool result untouched
@@ -44,7 +44,6 @@ async function main() {
   noteDead(rooms, results);
   const { blocks, next, changed, anyFresh } = collectFresh(rooms, results, state);
   if (changed) saveCursors(next);
-  try { await postStatus(state, rooms, input); } catch { /* best effort */ }
   if (!anyFresh) return quiet();
 
   // Deliberately not an instruction. The agent is in the middle of something

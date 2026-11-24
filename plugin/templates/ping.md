@@ -62,7 +62,7 @@ and their git name is used with no role.
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" here
   ```
-- Input is `status on` or `status off` → turn automatic activity updates on or off:
+- Input is `status on` or `status off` → turn the automatic "what I just did" updates on or off (on by default):
   ```
   node "${CLAUDE_PLUGIN_ROOT}/hooks/ping-connect.mjs" status '<on|off>'
   ```

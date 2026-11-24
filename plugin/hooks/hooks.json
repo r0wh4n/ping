@@ -25,6 +25,12 @@
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-wake.mjs\"",
             "asyncRewake": true,
             "timeout": 10800
+          },
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/ping-summary.mjs\"",
+            "async": true,
+            "timeout": 120
           }
         ]
       }

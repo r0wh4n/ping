@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { join as joinPath } from "node:path";
 import { newRoomKey, keyFrom, seal, openDeep, sealArgs } from "./ping-crypto.mjs";
 import { interactive } from "./ping-wake.mjs";
-import { render as renderSkill, MARK as SKILL_MARK } from "./ping-command.mjs";
+import { render as renderSkill, MARK as SKILL_MARK, anywhereOnce } from "./ping-command.mjs";
+import { turnOf, actionOf, fallbackLine, cleanLine } from "./ping-summary.mjs";
 
 // --- @mention -------------------------------------------------------------
 assert.equal(mentionsMe("hey @rohan can you look", "rohan"), true, "plain mention");
@@ -161,7 +162,7 @@ assert.equal(legacy[0].name, "me", "legacy shape must keep name or @mentions bre
   assert.match(r.blocks[0], /deploy is green/, "delivers the new message");
   assert.doesNotMatch(r.blocks[0], /old news/, "never re-delivers what was already seen");
   assert.doesNotMatch(r.blocks[0], /my own line/, "never delivers my own message back to me");
-  assert.match(r.blocks[0], /⚙ ana is working on: edited useDM\.ts/, "a status post is not rendered as something ana said");
+  assert.match(r.blocks[0], /⚙ ana: edited useDM\.ts/, "a status post is not rendered as something ana said");
   assert.equal(r.next[0].last_seen, "2026-11-03T11:01:00Z", "cursor advances to the newest delivered");
   assert.equal(collectFresh([room], [null], { active: "team" }).changed, false, "a failed poll leaves the cursor alone");
   // A room seen for the first time adopts history as read rather than replaying it.
@@ -430,7 +431,7 @@ assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, n
   const only = collectFresh([room], [[log("Mac", "working on the frontend", "2026-01-02T00:00:01Z"), log("Mac", "working on the backend", "2026-01-02T00:00:02Z")]], { active: "Scratch" });
   assert.equal(only.anyFresh, true, "status lines are still new");
   assert.equal(only.anyNews, false, "but they are not news: no wake, no blocked stop");
-  assert.equal((only.blocks[0].match(/is working on/g) ?? []).length, 1, "only each member's latest status is shown");
+  assert.equal((only.blocks[0].match(/⚙ Mac:/g) ?? []).length, 1, "only each member's latest status is shown");
   assert.match(only.blocks[0], /working on the backend/, "and it is the latest one");
   const chat = collectFresh([room], [[{ from: "EC2", mine: false, kind: "chat", text: "pong", created_at: "2026-01-02T00:00:03Z" }]], { active: "Scratch" });
   assert.equal(chat.anyNews, true, "a chat message is news");
@@ -446,6 +447,42 @@ assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, n
   assert.deepEqual(roomsOf(x).map((r) => r.token), ["gm_live"], "gone for over two minutes: the room is dropped");
   const back = markDead(markDead(st, gone, t0), new Map([["gm_gone", "alive"]]), t0 + 200_000);
   assert.equal(roomsOf(back).find((r) => r.token === "gm_gone").dead_count, undefined, "a room that answers again is cleared");
+}
+
+
+// --- turn summaries (0.4.5) --------------------------------------------------
+{
+  const L = (o) => JSON.stringify(o);
+  const user = (t, ts) => L({ type: "user", timestamp: ts, message: { content: t } });
+  const tool = (name, input, ts) => L({ type: "assistant", timestamp: ts, message: { content: [{ type: "tool_use", name, input }] } });
+  const lines = [
+    user("make a todo app", "2026-01-01T00:00:00Z"), tool("Write", { file_path: "/w/todo.html" }, "2026-01-01T00:00:01Z"),
+    user("create a tic tac toe game and write a counting.txt file", "2026-01-01T00:01:00Z"),
+    tool("Write", { file_path: "/Users/x/Desktop/tictactoe.html" }, "2026-01-01T00:01:01Z"),
+    tool("Write", { file_path: "/Users/x/Desktop/counting.txt" }, "2026-01-01T00:01:02Z"),
+    tool("mcp__plugin_ping_ping__ping_say", { text: "hi" }, "2026-01-01T00:01:03Z"),
+  ];
+  const t = turnOf(lines, "");
+  assert.equal(t.task, "create a tic tac toe game and write a counting.txt file", "the latest request is the task");
+  assert.deepEqual(t.actions, ["wrote tictactoe.html", "wrote counting.txt"], "first summary covers only the latest request; Ping's own calls are not work; no folder paths");
+  assert.equal(turnOf(lines, t.until).actions.length, 0, "a turn is summarised once");
+  assert.equal(turnOf([user("what is 2+2", "2026-01-02T00:00:00Z")], "").actions.length, 0, "a turn that only talked posts nothing");
+  assert.equal(fallbackLine(t.actions), "wrote tictactoe.html, counting.txt", "without a model, it still says what changed");
+  assert.match(actionOf({ name: "Bash", input: { command: "mysql --password=hunter2 app" } }), /\[redacted\]/, "command text is redacted before the model sees it");
+  assert.equal(cleanLine("created a tic-tac-toe game and a counting.txt text file."), "created a tic-tac-toe game and a counting.txt text file", "a trailing period is dropped");
+  assert.equal(cleanLine("NONE"), null, "NONE posts nothing");
+}
+
+
+// --- every room is "anywhere" once, then /ping here sticks (0.4.5) ---------
+{
+  const old = { active: "A", rooms: [{ token: "gm_a", group: "A", path: "/work/a" }, { token: "gm_b", group: "B" }] };
+  const once = anywhereOnce(old);
+  assert.ok(roomsOf(once).every((r) => r.path === undefined), "rooms joined before 0.4.4 deliver everywhere");
+  assert.equal(once.scope_default, "anywhere", "and that is recorded");
+  const narrowed = { ...once, rooms: roomsOf(once).map((r) => (r.group === "A" ? { ...r, path: "/work/a" } : r)) };
+  assert.equal(roomsOf(anywhereOnce(narrowed)).find((r) => r.group === "A").path, "/work/a", "a later /ping here is kept");
+  assert.equal(statusRoom(roomsOf(once), "A").group, "A", "summaries go to the active room");
 }
 
 console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);

@@ -13,7 +13,8 @@ import { readFileSync, writeFileSync, renameSync, mkdirSync, openSync, closeSync
 import { homedir } from "node:os";
 import { join, resolve, sep } from "node:path";
 
-export const DIR = join(homedir(), ".ping");
+// PING_DIR: a separate state folder, for testing without touching real rooms.
+export const DIR = process.env.PING_DIR || join(homedir(), ".ping");
 export const STATE = join(DIR, "state.json");
 const LOCK = STATE + ".lock";
 

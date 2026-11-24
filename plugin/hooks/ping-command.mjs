@@ -19,6 +19,7 @@ import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { readState, updateState, roomsOf } from "./ping-state.mjs";
 
 export const MARK = "<!-- Written by the Ping plugin at each session start. Delete this line to keep your own edits. -->";
 
@@ -46,7 +47,18 @@ export function install(root, configDir) {
   return now === null ? "installed" : "updated";
 }
 
+// Once per machine: every room delivers in every project. Before 0.4.4 a join
+// tied the room to the folder it was made in, so it went quiet everywhere else.
+// After this runs, `/ping here` still limits a room, and that sticks.
+export function anywhereOnce(state) {
+  if (state.scope_default === "anywhere") return state;
+  return { ...state, scope_default: "anywhere", rooms: roomsOf(state).map(({ path: _path, ...room }) => room) };
+}
+
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    if (readState().scope_default !== "anywhere" && roomsOf(readState()).length) updateState(anywhereOnce);
+  } catch { /* never break a session start over this */ }
   try {
     const root = process.env.CLAUDE_PLUGIN_ROOT || dirname(dirname(fileURLToPath(import.meta.url)));
     install(root, process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"));

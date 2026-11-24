@@ -121,8 +121,14 @@ async function recentFiles(dir, sinceMs, depth = 2, budget = 1200) {
  * Paths are read here and never sent: only the label goes. Best effort
  * throughout — this must never be the reason a tool call fails.
  */
+// Set from `initialize`. Claude Code posts a real summary of each turn from
+// its Stop hook (ping-summary.mjs), so under Claude Code this file-watching
+// guesswork — "working on docs and the frontend" — stays quiet. Clients with no
+// hooks (Codex, Cursor) still get it: it is the only signal they have.
+let underClaudeCode = process.env.CLAUDECODE === "1";
+
 async function autoLog(room, key) {
-  if (!room?.token) return;
+  if (!room?.token || underClaudeCode) return;
   // The directory the CLIENT is running in, not the one the room was joined
   // in. Someone joins once in ~/ping and then builds a calculator on the
   // Desktop; watching the join directory means watching a repo they left, and
@@ -473,6 +479,7 @@ rl.on("line", async (line) => {
   const { id, method, params } = msg;
   try {
     if (method === "initialize") {
+      if (/claude[- ]?code/i.test(String(params?.clientInfo?.name ?? ""))) underClaudeCode = true;
       watchWhileWeLive();
       return say({ jsonrpc: "2.0", id, result: {
         protocolVersion: params?.protocolVersion ?? "2024-11-05",
