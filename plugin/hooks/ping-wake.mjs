@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { DIR, readState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
-import { API, ANON, readStdin, collectFresh, saveCursors } from "./ping-watch.mjs";
+import { API, ANON, readStdin, collectFresh, saveCursors, noteDead } from "./ping-watch.mjs";
 
 const WAIT_S = 50; // the server's longest wait
 // Stop listening after this long with nothing said; the next stop starts again.
@@ -108,15 +108,18 @@ async function main() {
 
     const results = await waitAny(rooms);
     if (superseded() || sessionGone()) process.exit(0);
+    noteDead(rooms, results);
     if (results.every((r) => r === "dead")) process.exit(0); // left or removed everywhere
     if (results.every((r) => r === null || r === "dead")) { await sleep(15_000); continue; } // offline
 
     // Re-read: another hook may have delivered these while we waited.
     const now = readState();
     const fresh = rooms.map((r) => roomsOf(now).find((x) => x.token === r.token) ?? r);
-    const { blocks, next, changed, anyFresh } = collectFresh(fresh, results.map((r) => (Array.isArray(r) ? r : null)), now);
+    const { blocks, next, changed, anyNews } = collectFresh(fresh, results.map((r) => (Array.isArray(r) ? r : null)), now);
     if (changed) saveCursors(next);
-    if (!anyFresh) continue;
+    // Status lines alone do not wake anyone: each one cost every idle agent in
+    // the room a model turn. They are passed over here and shown mid-task.
+    if (!anyNews) continue;
 
     const hint = now.active ? ` (your active room is "${now.active}")` : "";
     process.stderr.write(

@@ -21,7 +21,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pathToFileURL } from "node:url";
 import { readFile } from "node:fs/promises";
-import { readState, updateState, roomsOf, roomMatchesCwd, VERSION } from "./ping-state.mjs";
+import { readState, updateState, roomsOf, roomMatchesCwd, dropRoom, VERSION } from "./ping-state.mjs";
 import { keyFrom, open, seal } from "./ping-crypto.mjs";
 import { summarize } from "./ping-activity.mjs";
 
@@ -75,9 +75,44 @@ export async function pollRoom(room) {
       { timeout: 10000 }
     );
     const data = JSON.parse(stdout);
+    if (data?.ok === false && DEAD.test(String(data.error ?? ""))) return "dead";
     return Array.isArray(data?.messages) ? data.messages : [];
   } catch {
     return null; // network/parse hiccup -> skip this room, leave its cursor
+  }
+}
+
+// What the server says about a token whose membership no longer exists (old
+// wording and new). Anything else — a timeout, a 500 — is not "gone".
+export const DEAD = /no longer in any room|Invalid or expired member token/i;
+
+// A room the server says is gone stays on this machine until it has said so
+// three times, at least two minutes apart from the first: the token is the
+// only way back into a room, and one bad response must not throw it away. Then
+// the room is dropped, so nothing polls it every few seconds for ever — a
+// deleted room was still being asked about hours later.
+export const DEAD_STRIKES = 3;
+export const DEAD_AFTER_MS = 120_000;
+export function markDead(state, verdicts, now = Date.now()) {
+  let next = state;
+  for (const r of roomsOf(state)) {
+    const v = verdicts.get(r.token);
+    if (v === "dead") {
+      const since = r.dead_since ?? new Date(now).toISOString();
+      const count = (r.dead_count ?? 0) + 1;
+      next = count >= DEAD_STRIKES && now - Date.parse(since) >= DEAD_AFTER_MS
+        ? dropRoom(next, r.token)
+        : { ...next, rooms: roomsOf(next).map((x) => (x.token === r.token ? { ...x, dead_since: since, dead_count: count } : x)) };
+    } else if (v === "alive" && r.dead_count) {
+      next = { ...next, rooms: roomsOf(next).map((x) => (x.token === r.token ? { ...x, dead_since: undefined, dead_count: undefined } : x)) };
+    }
+  }
+  return next;
+}
+export function noteDead(rooms, results) {
+  const verdicts = new Map(rooms.map((r, i) => [r.token, results[i] === "dead" ? "dead" : Array.isArray(results[i]) ? "alive" : null]));
+  if ([...verdicts.values()].some((v) => v === "dead") || rooms.some((r) => r.dead_count)) {
+    updateState((cur) => markDead(cur, verdicts));
   }
 }
 
@@ -156,12 +191,16 @@ async function main() {
   if (!rooms.length) return allowStop();
 
   const results = await Promise.all(rooms.map((r) => pollRoom(r)));
+  noteDead(rooms, results);
   // Never let a status post stand between the agent and stopping.
   try { await postStatus(state, rooms, input); } catch { /* best effort */ }
 
-  const { blocks, next, changed, anyFresh } = collectFresh(rooms, results, state);
+  const { blocks, next, changed, anyNews } = collectFresh(rooms, results, state);
   if (changed) saveCursors(next);
-  if (!anyFresh) return allowStop();
+  // Only something said keeps the agent going. Status lines ("X is working
+  // on…") used to block the stop too, so every member's once-a-minute status
+  // bought every other idle agent another model turn.
+  if (!anyNews) return allowStop();
 
   const activeHint = state.active ? ` (your active room is "${state.active}")` : "";
   const reason =
@@ -180,13 +219,14 @@ async function main() {
 export function collectFresh(rooms, results, state) {
   let changed = false;
   let anyFresh = false;
+  let anyNews = false; // something other than status lines
   const blocks = [];
   const next = rooms.map((r) => ({ ...r }));
 
   for (let i = 0; i < rooms.length; i++) {
     const room = rooms[i];
     const msgs = results[i];
-    if (msgs === null) continue; // failed poll
+    if (!Array.isArray(msgs)) continue; // failed poll, or a room that is gone
 
     if (!room.last_seen) {
       // First sight of this room: treat existing history as already seen.
@@ -204,6 +244,7 @@ export function collectFresh(rooms, results, state) {
       next[i].last_seen = fresh.reduce((a, m) => (m.created_at > a ? m.created_at : a), room.last_seen);
       changed = true;
       anyFresh = true;
+      if (fresh.some((m) => m.kind !== "log")) anyNews = true;
       // For a room that isn't the active one, hand the agent its token so it can
       // reply there via ping_say with room:"gm_…".
       const isActive = room.group && state.active && room.group === state.active;
@@ -214,7 +255,10 @@ export function collectFresh(rooms, results, state) {
       const tag = mentioned ? " — you were @mentioned" : "";
       // A status post arrives on the same stream as chat, but it is not chat:
       // `[ana] edited useDM.ts` reads like ana typed that sentence at you.
-      const lines = fresh.map((m) => {
+      // Status lines: only each member's latest. A room's status stream is one
+      // line a minute per member, and a backlog of them is noise, not news.
+      const lastLog = new Map(fresh.filter((m) => m.kind === "log").map((m) => [m.from, m]));
+      const lines = fresh.filter((m) => m.kind !== "log" || lastLog.get(m.from) === m).map((m) => {
         // Still sealed after opening: this machine has no key for the room, or
         // the wrong one. Say that, instead of pasting ciphertext at the agent.
         const text = /^ping-e2e:v\d+:/.test(String(m.text || ""))
@@ -227,7 +271,7 @@ export function collectFresh(rooms, results, state) {
       blocks.push(`  ${flag}${room.group || "group"}${tag}${hint}:\n${lines}`);
     }
   }
-  return { blocks, next, changed, anyFresh };
+  return { blocks, next, changed, anyFresh, anyNews };
 }
 
 // Merge only the cursors we advanced back into whatever state is on disk NOW.

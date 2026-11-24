@@ -4,7 +4,7 @@
 // matching, room dedupe on re-join, and concurrent state writes.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mentionsMe, collectFresh, statusRoom } from "./ping-watch.mjs";
+import { mentionsMe, collectFresh, statusRoom, markDead } from "./ping-watch.mjs";
 import { upsertRoom, roomsOf, dropRoom, hooksHealth, HOOK_TICK_MS, VERSION } from "./ping-state.mjs";
 import { summarize, describeCommit, describeWork, parseCommitLog, parseStatus, taskFrom } from "./ping-activity.mjs";
 import { takeFlags } from "./ping-connect.mjs";
@@ -420,6 +420,32 @@ assert.match(VERSION, /^\d+\.\d+\.\d+$/, "VERSION must come from the manifest, n
   assert.ok(out.includes('node "/opt/ping/hooks/ping-connect.mjs"'), "the plugin path is filled in");
   assert.ok(out.indexOf(SKILL_MARK) > out.indexOf("\n---\n", 3), "the marker sits after the frontmatter, not inside it");
   assert.ok(out.includes("$ARGUMENTS"), "arguments are left for Claude Code to fill");
+}
+
+
+// --- status lines don't wake anyone; gone rooms are forgotten (0.4.2) -------
+{
+  const room = { token: "gm_live", group: "Scratch", name: "me", last_seen: "2026-01-01T00:00:00Z" };
+  const log = (from, text, t) => ({ from, mine: false, kind: "log", text, created_at: t });
+  const only = collectFresh([room], [[log("Mac", "working on the frontend", "2026-01-02T00:00:01Z"), log("Mac", "working on the backend", "2026-01-02T00:00:02Z")]], { active: "Scratch" });
+  assert.equal(only.anyFresh, true, "status lines are still new");
+  assert.equal(only.anyNews, false, "but they are not news: no wake, no blocked stop");
+  assert.equal((only.blocks[0].match(/is working on/g) ?? []).length, 1, "only each member's latest status is shown");
+  assert.match(only.blocks[0], /working on the backend/, "and it is the latest one");
+  const chat = collectFresh([room], [[{ from: "EC2", mine: false, kind: "chat", text: "pong", created_at: "2026-01-02T00:00:03Z" }]], { active: "Scratch" });
+  assert.equal(chat.anyNews, true, "a chat message is news");
+
+  const st = { rooms: [{ token: "gm_gone", group: "Old" }, { token: "gm_live", group: "Scratch" }], active: "Scratch" };
+  const gone = new Map([["gm_gone", "dead"], ["gm_live", "alive"]]);
+  const t0 = Date.parse("2026-01-01T00:00:00Z");
+  let x = markDead(st, gone, t0);
+  x = markDead(x, gone, t0 + 30_000);
+  x = markDead(x, gone, t0 + 60_000);
+  assert.equal(roomsOf(x).length, 2, "three strikes inside two minutes keep the room — one bad minute is not proof");
+  x = markDead(x, gone, t0 + 121_000);
+  assert.deepEqual(roomsOf(x).map((r) => r.token), ["gm_live"], "gone for over two minutes: the room is dropped");
+  const back = markDead(markDead(st, gone, t0), new Map([["gm_gone", "alive"]]), t0 + 200_000);
+  assert.equal(roomsOf(back).find((r) => r.token === "gm_gone").dead_count, undefined, "a room that answers again is cleared");
 }
 
 console.log(`selfcheck: all assertions passed (plugin ${VERSION})`);

@@ -18,7 +18,7 @@
 
 import { pathToFileURL } from "node:url";
 import { readState, updateState, roomsOf, roomMatchesCwd } from "./ping-state.mjs";
-import { readStdin, pollRoom, postStatus, collectFresh, saveCursors } from "./ping-watch.mjs";
+import { readStdin, pollRoom, postStatus, collectFresh, saveCursors, noteDead } from "./ping-watch.mjs";
 
 const TICK_MS = 10_000;
 const quiet = () => process.exit(0); // no stdout => nothing injected, tool result untouched
@@ -41,6 +41,7 @@ async function main() {
   if (!rooms.length) return quiet();
 
   const results = await Promise.all(rooms.map((r) => pollRoom(r)));
+  noteDead(rooms, results);
   const { blocks, next, changed, anyFresh } = collectFresh(rooms, results, state);
   if (changed) saveCursors(next);
   try { await postStatus(state, rooms, input); } catch { /* best effort */ }
