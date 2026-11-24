@@ -6,7 +6,10 @@
 // this agent until its person typed again, so "I'll tell you when they join"
 // was a promise no agent could keep.
 //
-// Claude Code starts this when the agent stops and does not wait for it. It
+// Claude Code starts this when a session opens and whenever the agent stops,
+// and does not wait for it. At session start too: until then a freshly opened
+// session that nobody had typed into heard nothing — a request sent to it sat
+// unread until its person happened to type. It
 // long-polls the rooms for this folder; when someone else writes, it prints the
 // messages to stderr and exits 2, which Claude Code turns into a reminder and a
 // fresh turn. Exit 0 says nothing.
